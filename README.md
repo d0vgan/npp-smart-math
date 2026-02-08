@@ -2,6 +2,10 @@
 
 **Smart Math** is a lightweight, powerful plugin that turns Notepad++ into a dynamic calculator, inspired by tools like *Soulver* or *Numara*. It allows you to perform calculations naturally in plain text, showing results in real-time without altering your file content.
 
+![image](https://i.ibb.co/ZPdC5VL/img01.jpg)
+
+![image](https://i.ibb.co/NgC1jsN9/img02.jpg)
+
 ### ✨ Features
 *   **Real-Time Evaluation:** Instantly evaluates addition, subtraction, multiplication, and division as you type.
 *   **Non-Invasive Annotations:** Results are displayed using Scintilla’s End-of-Line (EOL) annotations. Your actual text remains untouched.
