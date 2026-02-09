@@ -5,7 +5,9 @@
 #include "Inc\ConfigManager.bi"
 
 const PLUGIN_NAME = wstr("Smart Math Plugin")
-const TB_ICON_ID = 100
+const TB_BMP_ID = 100
+const TB_ICON_LIGHT_ID = 101
+const TB_ICON_DARK_ID = 102
 const NB_FUNC = 10
 const SCI_GETLINECOUNT = 2154
 const SCI_GETLINE = 2153
@@ -242,12 +244,30 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     UpdateUIState()
     
   elseif pNotify->nmhdr.code = NPPN_TBMODIFICATION then
-    dim as HBITMAP hBmp = CreateCompatibleBitmap(GetDC(nppData._nppHandle), 16, 16)
-    dim as HICON hIcon = LoadImage(hInst, MAKEINTRESOURCE(TB_ICON_ID), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR)
-    dim as ToolbarIcons tbIcons
+    dim as HDC hdc = GetDC(NULL)
+    dim as integer bmpX = 16, bmpY = 16
+    dim as integer icoX = 32, icoY = 32
+    
+    if hdc then
+      bmpX = MulDiv(16, GetDeviceCaps(hdc, LOGPIXELSX), 96)
+      bmpY = MulDiv(16, GetDeviceCaps(hdc, LOGPIXELSY), 96)
+      icoX = MulDiv(32, GetDeviceCaps(hdc, LOGPIXELSX), 96)
+      icoY = MulDiv(32, GetDeviceCaps(hdc, LOGPIXELSY), 96)
+      ReleaseDC(NULL, hdc)
+    end if
+    
+    dim as HBITMAP hBmp = LoadImage(hInst, MAKEINTRESOURCE(TB_BMP_ID), IMAGE_BITMAP, bmpX, bmpY, LR_LOADTRANSPARENT or LR_LOADMAP3DCOLORS)
+    dim as HICON hIconLight = LoadImage(hInst, MAKEINTRESOURCE(TB_ICON_LIGHT_ID), IMAGE_ICON, icoX, icoY, LR_DEFAULTSIZE)
+    dim as HICON hIconDark = LoadImage(hInst, MAKEINTRESOURCE(TB_ICON_DARK_ID), IMAGE_ICON, icoX, icoY, LR_DEFAULTSIZE)
+    
+    if hIconDark = 0 then hIconDark = hIconLight
+    
+    dim as toolbarIconsWithDarkMode tbIcons
     tbIcons.hToolbarBmp = hBmp
-    tbIcons.hToolbarIcon = hIcon
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON, funcItems(0)._cmdID, cast(LPARAM, @tbIcons))
+    tbIcons.hToolbarIcon = hIconLight
+    tbIcons.hToolbarIconDarkMode = hIconDark
+    
+    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, funcItems(0)._cmdID, cast(LPARAM, @tbIcons))
     
   elseif pNotify->nmhdr.code = NPPN_BUFFERACTIVATED then
     UpdateUIState()
