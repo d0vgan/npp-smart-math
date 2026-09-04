@@ -3,6 +3,7 @@
 #include "Inc\PluginInterface.bi"
 #include "Inc\MathParser.bi"
 #include "Inc\ConfigManager.bi"
+#include "Inc\Smart-Math-Format.bi"
 
 const PLUGIN_NAME = wstr("Smart Math Plugin")
 const TB_BMP_ID = 100
@@ -102,11 +103,9 @@ sub UpdateAnnotations()
   dim as integer i, nLines, oldMask, lineBufLen, lineContentLen
   dim as integer maxContentLen = 0, padding = 0
   dim as integer iStart, iEnd
-  dim as double dRes
+  dim as RawResult raw
   dim as zstring ptr pLineBuf
-  dim as string sResText
-  dim as zstring * 64 sFormatBuf
-  dim as integer decPlaces = Config_GetDecimalPlaces()
+  dim as string sLine, sResText
   
   if hScintilla = 0 then exit sub
 
@@ -116,6 +115,7 @@ sub UpdateAnnotations()
   SendMessage(hScintilla, SCI_EOLANNOTATIONSETVISIBLE, EOLANNOTATION_STANDARD, 0)
   
   Parser_ClearVariables()
+  Parser_SetSupportComplexNumbers(TRUE)
 
   nLines = SendMessage(hScintilla, SCI_GETLINECOUNT, 0, 0)
   
@@ -135,13 +135,20 @@ sub UpdateAnnotations()
     if lineBufLen > 0 then
       pLineBuf = callocate(lineBufLen + 1)
       SendMessage(hScintilla, SCI_GETLINE, i, cast(LPARAM, pLineBuf))
-      pLineBuf[lineBufLen] = 0
+      if lineContentLen < lineBufLen then
+        pLineBuf[lineContentLen] = 0
+      else
+        pLineBuf[lineBufLen] = 0
+      end if
+      sLine = *pLineBuf
       
-      if Parser_TryEvaluate(pLineBuf, dRes) then
-        padding = maxContentLen - lineContentLen + 5
-        sprintf(sFormatBuf, "%.*f", decPlaces, dRes)
-        sResText = space(padding) & "= " & *cast(zstring ptr, @sFormatBuf)
-        SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, i, cast(LPARAM, strptr(sResText)))
+      if Parser_TryEvaluateExRaw(sLine, raw) then
+        sResText = FormatRawEvaluationResult(raw)
+        if Len(sResText) > 0 then
+          padding = maxContentLen - lineContentLen + 5
+          sResText = space(padding) & sResText
+          SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, i, cast(LPARAM, strptr(sResText)))
+        end if
       end if
       deallocate(pLineBuf)
     end if
