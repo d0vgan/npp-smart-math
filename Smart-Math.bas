@@ -16,12 +16,13 @@ const SCI_LINELENGTH = 2350
 const SCI_POSITIONFROMLINE = 2167
 const SCI_GETLINEENDPOSITION = 2136
 const SCI_EOLANNOTATIONSETTEXT = 2740
-const SCI_EOLANNOTATIONSETVISIBLE = 2745
 const SCI_EOLANNOTATIONCLEARALL = 2744
+const SCI_EOLANNOTATIONSETVISIBLE = 2745
 const SCI_GETMODEVENTMASK = 2378
 const SCI_SETMODEVENTMASK = 2359
 const EOLANNOTATION_STANDARD = 1
 const EOLANNOTATION_HIDDEN = 0
+const SMARTMATH_ERROR_PREFIX = " ! "
 const SCN_MODIFIED = 2008
 const NPPM_GETFULLPATHFROMBUFFERID = (NPPMSG + 58)
 const NPPM_GETCURRENTBUFFERID = (NPPMSG + 60)
@@ -96,6 +97,11 @@ function GetCurrentScintilla() as HWND
   return nppData._scintillaSecondHandle
 end function
 
+sub SetLineAnnotation(byval hScintilla as HWND, byval lineIdx as integer, byval padding as integer, byref sText as string)
+  dim as string sResText = space(padding) & sText
+  SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, cast(LPARAM, strptr(sResText)))
+end sub
+
 sub UpdateAnnotations()
   if Config_IsFileEnabled(GetCurrentPath()) = FALSE then exit sub
 
@@ -105,7 +111,7 @@ sub UpdateAnnotations()
   dim as integer iStart, iEnd
   dim as RawResult raw
   dim as zstring ptr pLineBuf
-  dim as string sLine, sResText
+  dim as string sLine, sResText, sErr
   
   if hScintilla = 0 then exit sub
 
@@ -146,8 +152,13 @@ sub UpdateAnnotations()
         sResText = FormatRawEvaluationResult(raw)
         if Len(sResText) > 0 then
           padding = maxContentLen - lineContentLen + 5
-          sResText = space(padding) & sResText
-          SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, i, cast(LPARAM, strptr(sResText)))
+          SetLineAnnotation(hScintilla, i, padding, sResText)
+        end if
+      else
+        sErr = Parser_GetLastError()
+        if Parser_IsFunctionHintError(sErr) then
+          padding = maxContentLen - lineContentLen + 5
+          SetLineAnnotation(hScintilla, i, padding, SMARTMATH_ERROR_PREFIX & sErr)
         end if
       end if
       deallocate(pLineBuf)
@@ -278,6 +289,10 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     
   elseif pNotify->nmhdr.code = NPPN_BUFFERACTIVATED then
     UpdateUIState()
+    
+  elseif pNotify->nmhdr.code = NPPN_WORDSTYLESUPDATED _
+      orelse pNotify->nmhdr.code = NPPN_LANGCHANGED then
+    if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations()
     
   elseif pNotify->nmhdr.code = SCN_MODIFIED then
     if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations()
