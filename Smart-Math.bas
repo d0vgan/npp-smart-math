@@ -10,7 +10,12 @@ const PLUGIN_NAME = wstr("Smart Math Plugin")
 const TB_BMP_ID = 100
 const TB_ICON_LIGHT_ID = 101
 const TB_ICON_DARK_ID = 102
-const NB_FUNC = 12
+const IDX_TOGGLE = 0
+const IDX_SEPARATOR = 1
+const IDX_PREC0 = 2
+const IDX_COMPLEX = 11
+const IDX_SHOWERRORS = 12
+const NB_FUNC = 13
 const SCI_GETFIRSTVISIBLELINE = 2152
 const SCI_GETLINECOUNT = 2154
 const SCI_GETLINE = 2153
@@ -106,16 +111,17 @@ sub OrganizeMenu()
   dim as HMENU hSubMenuDecimal = CreatePopupMenu()
   dim as integer i
   
-  for i = 1 to 9
-    RemoveMenu(hMyMenu, funcItems(i)._cmdID, MF_BYCOMMAND)
-    AppendMenu(hSubMenuDecimal, MF_STRING, funcItems(i)._cmdID, wstr(str(i - 1)))
+  for i = 0 to 8
+    RemoveMenu(hMyMenu, funcItems(IDX_PREC0 + i)._cmdID, MF_BYCOMMAND)
+    AppendMenu(hSubMenuDecimal, MF_STRING, funcItems(IDX_PREC0 + i)._cmdID, wstr(str(i)))
   next i
   
   AppendMenu(hMyMenu, MF_STRING or MF_POPUP, cast(UINT_PTR, hSubMenuDecimal), wstr("Decimal Places"))
+  ModifyMenu(hMyMenu, funcItems(IDX_SEPARATOR)._cmdID, MF_BYCOMMAND or MF_SEPARATOR, funcItems(IDX_SEPARATOR)._cmdID, NULL)
   DrawMenuBar(nppData._nppHandle)
   SetPrecision(Config_GetDecimalPlaces())
-  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(10)._cmdID, iif(Config_GetSupportComplexNumbers(), 1, 0))
-  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(11)._cmdID, iif(Config_GetShowErrors(), 1, 0))
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_COMPLEX)._cmdID, iif(Config_GetSupportComplexNumbers(), 1, 0))
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_SHOWERRORS)._cmdID, iif(Config_GetShowErrors(), 1, 0))
 end sub
 
 function GetCurrentPath() as string
@@ -476,10 +482,10 @@ end sub
 sub SetPrecision(p as integer)
   Config_SetDecimalPlaces(p)
   dim as integer i
-  for i = 1 to 9
-    SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(i)._cmdID, 0)
+  for i = 0 to 8
+    SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_PREC0 + i)._cmdID, 0)
   next i
-  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(p + 1)._cmdID, 1)
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_PREC0 + p)._cmdID, 1)
   
   Config_Save()
   if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
@@ -499,7 +505,7 @@ sub ToggleComplexNumbers cdecl()
   dim as boolean enabled = not Config_GetSupportComplexNumbers()
   Config_SetSupportComplexNumbers(enabled)
   Config_Save()
-  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(10)._cmdID, iif(enabled, 1, 0))
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_COMPLEX)._cmdID, iif(enabled, 1, 0))
   if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
 end sub
 
@@ -507,7 +513,7 @@ sub ToggleShowErrors cdecl()
   dim as boolean enabled = not Config_GetShowErrors()
   Config_SetShowErrors(enabled)
   Config_Save()
-  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(11)._cmdID, iif(enabled, 1, 0))
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_SHOWERRORS)._cmdID, iif(enabled, 1, 0))
   if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
 end sub
 
@@ -525,9 +531,17 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
   *nbF = NB_FUNC
   dim as wstring * 64 sMainName = "Smart Math Plugin"
   
-  with funcItems(0)
+  with funcItems(IDX_TOGGLE)
     ._itemName = sMainName
     ._pFunc = @TogglePlugin
+    ._cmdID = 0
+    ._init2Check = FALSE
+    ._pShKey = NULL
+  end with
+
+  with funcItems(IDX_SEPARATOR)
+    ._itemName = ""
+    ._pFunc = NULL
     ._cmdID = 0
     ._init2Check = FALSE
     ._pShKey = NULL
@@ -541,7 +555,7 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
   dim as wstring * 64 sTempName
   for i = 0 to 8
     sTempName = "Decimal places " & i
-    with funcItems(i + 1)
+    with funcItems(IDX_PREC0 + i)
       ._itemName = sTempName
       ._pFunc = pFuncs(i)
       ._cmdID = 0
@@ -550,7 +564,7 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
     end with
   next i
 
-  with funcItems(10)
+  with funcItems(IDX_COMPLEX)
     ._itemName = "Complex Numbers"
     ._pFunc = @ToggleComplexNumbers
     ._cmdID = 0
@@ -558,7 +572,7 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
     ._pShKey = NULL
   end with
 
-  with funcItems(11)
+  with funcItems(IDX_SHOWERRORS)
     ._itemName = "Show Errors"
     ._pFunc = @ToggleShowErrors
     ._cmdID = 0
