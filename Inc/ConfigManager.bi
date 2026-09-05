@@ -13,6 +13,8 @@ declare sub Config_Save()
 ' Getters y Setters de Propiedades
 declare sub Config_SetDecimalPlaces(p as integer)
 declare function Config_GetDecimalPlaces() as integer
+declare sub Config_SetSupportComplexNumbers(byval enabled as boolean)
+declare function Config_GetSupportComplexNumbers() as boolean
 
 ' Gestion de Archivos Habilitados
 declare function Config_IsFileEnabled(path as string) as boolean

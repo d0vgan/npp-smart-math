@@ -10,7 +10,7 @@ const PLUGIN_NAME = wstr("Smart Math Plugin")
 const TB_BMP_ID = 100
 const TB_ICON_LIGHT_ID = 101
 const TB_ICON_DARK_ID = 102
-const NB_FUNC = 10
+const NB_FUNC = 11
 const SCI_GETFIRSTVISIBLELINE = 2152
 const SCI_GETLINECOUNT = 2154
 const SCI_GETLINE = 2153
@@ -105,6 +105,7 @@ sub OrganizeMenu()
   AppendMenu(hMyMenu, MF_STRING or MF_POPUP, cast(UINT_PTR, hSubMenuDecimal), wstr("Decimal Places"))
   DrawMenuBar(nppData._nppHandle)
   SetPrecision(Config_GetDecimalPlaces())
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(10)._cmdID, iif(Config_GetSupportComplexNumbers(), 1, 0))
 end sub
 
 function GetCurrentPath() as string
@@ -373,7 +374,7 @@ sub UpdateAnnotations(byval forceFull as boolean = FALSE)
   SendMessage(hScintilla, SCI_EOLANNOTATIONSETVISIBLE, EOLANNOTATION_STANDARD, 0)
 
   Parser_ClearVariables()
-  Parser_SetSupportComplexNumbers(TRUE)
+  Parser_SetSupportComplexNumbers(Config_GetSupportComplexNumbers())
 
   redim preserve g_cachedLineText(0 to nLines - 1)
   redim preserve g_cachedResult(0 to nLines - 1)
@@ -447,6 +448,14 @@ sub SetPrec6 cdecl() : SetPrecision(6) : end sub
 sub SetPrec7 cdecl() : SetPrecision(7) : end sub
 sub SetPrec8 cdecl() : SetPrecision(8) : end sub
 
+sub ToggleComplexNumbers cdecl()
+  dim as boolean enabled = not Config_GetSupportComplexNumbers()
+  Config_SetSupportComplexNumbers(enabled)
+  Config_Save()
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(10)._cmdID, iif(enabled, 1, 0))
+  if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
+end sub
+
 extern "C"
 
 sub setInfo(byval notpadPlusData as NppData) export
@@ -485,6 +494,14 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
       ._pShKey = NULL
     end with
   next i
+
+  with funcItems(10)
+    ._itemName = "Complex Numbers"
+    ._pFunc = @ToggleComplexNumbers
+    ._cmdID = 0
+    ._init2Check = FALSE
+    ._pShKey = NULL
+  end with
   return @funcItems(0)
 end function
 
