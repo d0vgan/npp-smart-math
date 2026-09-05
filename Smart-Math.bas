@@ -16,6 +16,8 @@ const SCI_GETLINECOUNT = 2154
 const SCI_GETLINE = 2153
 const SCI_LINELENGTH = 2350
 const SCI_POSITIONFROMLINE = 2167
+const SCI_GETCURRENTPOS = 2008
+const SCI_SETEMPTYSELECTION = 2556
 const SCI_GETLINEENDPOSITION = 2136
 const SCI_POINTXFROMPOSITION = 2164
 const SCI_POINTYFROMPOSITION = 2165
@@ -201,13 +203,16 @@ function LineFromClientY(byval hScintilla as HWND, byval y as integer) as intege
 end function
 
 function TryCopyResultAtClientPoint(byval hScintilla as HWND, byval x as integer, byval y as integer) as boolean
-  dim as integer lineIdx, lineEnd, xLineEnd
+  dim as integer lineIdx, lineEnd, xLineEnd, caretPos
   if hScintilla = 0 then return FALSE
   lineIdx = LineFromClientY(hScintilla, y)
   lineEnd = SendMessage(hScintilla, SCI_GETLINEENDPOSITION, lineIdx, 0)
   xLineEnd = SendMessage(hScintilla, SCI_POINTXFROMPOSITION, 0, lineEnd)
   if x < xLineEnd then return FALSE
-  return CopyResultForLine(hScintilla, lineIdx)
+  if CopyResultForLine(hScintilla, lineIdx) = FALSE then return FALSE
+  caretPos = SendMessage(hScintilla, SCI_GETCURRENTPOS, 0, 0)
+  SendMessage(hScintilla, SCI_SETEMPTYSELECTION, caretPos, 0)
+  return TRUE
 end function
 
 function SciSubclassProc(byval hWnd as HWND, byval uMsg as UINT, byval wParam as WPARAM, byval lParam as LPARAM) as LRESULT
