@@ -4,26 +4,39 @@
 #include "Inc\MathParser.bi"
 #include "Inc\ConfigManager.bi"
 #include "Inc\Smart-Math-Format.bi"
+#include "Inc\Smart-Math-CopyNormalize.bi"
 
 const PLUGIN_NAME = wstr("Smart Math Plugin")
 const TB_BMP_ID = 100
 const TB_ICON_LIGHT_ID = 101
 const TB_ICON_DARK_ID = 102
 const NB_FUNC = 10
+const SCI_GETFIRSTVISIBLELINE = 2152
 const SCI_GETLINECOUNT = 2154
 const SCI_GETLINE = 2153
 const SCI_LINELENGTH = 2350
 const SCI_POSITIONFROMLINE = 2167
 const SCI_GETLINEENDPOSITION = 2136
+const SCI_POINTXFROMPOSITION = 2164
+const SCI_POINTYFROMPOSITION = 2165
+const SCI_TEXTHEIGHT = 2279
+const SCI_DOCLINEFROMVISIBLE = 2221
 const SCI_EOLANNOTATIONSETTEXT = 2740
+const SCI_EOLANNOTATIONGETTEXT = 2741
 const SCI_EOLANNOTATIONCLEARALL = 2744
 const SCI_EOLANNOTATIONSETVISIBLE = 2745
 const SCI_GETMODEVENTMASK = 2378
 const SCI_SETMODEVENTMASK = 2359
 const EOLANNOTATION_STANDARD = 1
 const EOLANNOTATION_HIDDEN = 0
-const SMARTMATH_ERROR_PREFIX = " ! "
+const SCN_DOUBLECLICK = 2006
 const SCN_MODIFIED = 2008
+#ifndef CF_UNICODETEXT
+const CF_UNICODETEXT = 13
+#endif
+#ifndef CP_UTF8
+const CP_UTF8 = 65001
+#endif
 const NPPM_GETFULLPATHFROMBUFFERID = (NPPMSG + 58)
 const NPPM_GETCURRENTBUFFERID = (NPPMSG + 60)
 
@@ -31,9 +44,13 @@ dim shared as HINSTANCE hInst
 dim shared as NppData nppData
 dim shared as FuncItem funcItems(NB_FUNC - 1)
 dim shared as boolean isNppClosing = FALSE
+dim shared as WNDPROC oldSciProc = 0
+redim shared g_annText(0 to 0) as string
 
 declare sub UpdateAnnotations()
 declare sub SetPrecision(p as integer)
+declare function CopyResultForLine(byval hScintilla as HWND, byval lineIdx as integer) as boolean
+declare function SciSubclassProc(byval hWnd as HWND, byval uMsg as UINT, byval wParam as WPARAM, byval lParam as LPARAM) as LRESULT
 
 sub DllLoad() constructor
   const cFlags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS or GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
@@ -97,8 +114,192 @@ function GetCurrentScintilla() as HWND
   return nppData._scintillaSecondHandle
 end function
 
+function GetScintillaLineText(byval hScintilla as HWND, byval lineIdx as integer) as string
+  dim as integer lineBufLen, iStart, iEnd, lineContentLen
+  dim as zstring ptr pLineBuf
+  dim as string sLine
+
+  lineBufLen = SendMessage(hScintilla, SCI_LINELENGTH, lineIdx, 0)
+  if lineBufLen <= 0 then return ""
+  iStart = SendMessage(hScintilla, SCI_POSITIONFROMLINE, lineIdx, 0)
+  iEnd = SendMessage(hScintilla, SCI_GETLINEENDPOSITION, lineIdx, 0)
+  lineContentLen = iEnd - iStart
+
+  pLineBuf = callocate(lineBufLen + 1)
+  SendMessage(hScintilla, SCI_GETLINE, lineIdx, cast(LPARAM, pLineBuf))
+  if lineContentLen < lineBufLen then
+    pLineBuf[lineContentLen] = 0
+  else
+    pLineBuf[lineBufLen] = 0
+  end if
+  sLine = *pLineBuf
+  deallocate(pLineBuf)
+  return sLine
+end function
+
+function DisplayTextFromEval(byref sLine as string) as string
+  dim as RawResult raw
+  dim as string sRes, sErr
+  if Parser_TryEvaluateExRaw(sLine, raw) then
+    sRes = FormatRawEvaluationResult(raw)
+    if Len(sRes) > 0 then return sRes
+  else
+    sErr = Parser_GetLastError()
+    if Parser_IsFunctionHintError(sErr) then return SMARTMATH_ERROR_PREFIX & sErr
+  end if
+  return ""
+end function
+
+function GetEolAnnotationText(byval hScintilla as HWND, byval lineIdx as integer) as string
+  dim as integer nLen, nGot, nAlloc
+  dim as zstring ptr pBuf
+  dim as string sText
+  if (hScintilla = 0) orelse (lineIdx < 0) then return ""
+  nLen = SendMessage(hScintilla, SCI_EOLANNOTATIONGETTEXT, lineIdx, 0)
+  if nLen < 0 then nLen = 0
+  if nLen > 65536 then nLen = 65536
+  nAlloc = nLen
+  if nAlloc < 1 then nAlloc = 4096
+  pBuf = callocate(nAlloc + 1)
+  if pBuf = 0 then return ""
+  nGot = SendMessage(hScintilla, SCI_EOLANNOTATIONGETTEXT, lineIdx, cast(LPARAM, pBuf))
+  if nGot <= 0 then
+    deallocate(pBuf)
+    return ""
+  end if
+  if nGot > nAlloc then nGot = nAlloc
+  pBuf[nGot] = 0
+  sText = *pBuf
+  deallocate(pBuf)
+  return sText
+end function
+
+function LineFromClientY(byval hScintilla as HWND, byval y as integer) as integer
+  dim as integer lineH, firstVis, firstDoc, firstPos, y0, vis, nLines, lineIdx
+  if hScintilla = 0 then return 0
+  nLines = SendMessage(hScintilla, SCI_GETLINECOUNT, 0, 0)
+  if nLines <= 0 then return 0
+  lineH = SendMessage(hScintilla, SCI_TEXTHEIGHT, 0, 0)
+  if lineH < 1 then lineH = 1
+  firstVis = SendMessage(hScintilla, SCI_GETFIRSTVISIBLELINE, 0, 0)
+  firstDoc = SendMessage(hScintilla, SCI_DOCLINEFROMVISIBLE, firstVis, 0)
+  firstPos = SendMessage(hScintilla, SCI_POSITIONFROMLINE, firstDoc, 0)
+  y0 = SendMessage(hScintilla, SCI_POINTYFROMPOSITION, 0, firstPos)
+  vis = firstVis + (y - y0) \ lineH
+  if vis < 0 then vis = 0
+  lineIdx = SendMessage(hScintilla, SCI_DOCLINEFROMVISIBLE, vis, 0)
+  if lineIdx < 0 then lineIdx = 0
+  if lineIdx >= nLines then lineIdx = nLines - 1
+  return lineIdx
+end function
+
+function TryCopyResultAtClientPoint(byval hScintilla as HWND, byval x as integer, byval y as integer) as boolean
+  dim as integer lineIdx, lineEnd, xLineEnd
+  if hScintilla = 0 then return FALSE
+  lineIdx = LineFromClientY(hScintilla, y)
+  lineEnd = SendMessage(hScintilla, SCI_GETLINEENDPOSITION, lineIdx, 0)
+  xLineEnd = SendMessage(hScintilla, SCI_POINTXFROMPOSITION, 0, lineEnd)
+  if x < xLineEnd then return FALSE
+  return CopyResultForLine(hScintilla, lineIdx)
+end function
+
+function SciSubclassProc(byval hWnd as HWND, byval uMsg as UINT, byval wParam as WPARAM, byval lParam as LPARAM) as LRESULT
+  if uMsg = WM_LBUTTONDBLCLK then
+    if Config_IsFileEnabled(GetCurrentPath()) then
+      dim as integer x = cint(cshort(loword(lParam)))
+      dim as integer y = cint(cshort(hiword(lParam)))
+      if TryCopyResultAtClientPoint(hWnd, x, y) then return 0
+    end if
+  end if
+  if oldSciProc <> 0 then
+    return CallWindowProc(oldSciProc, hWnd, uMsg, wParam, lParam)
+  end if
+  return DefWindowProc(hWnd, uMsg, wParam, lParam)
+end function
+
+sub HookScintilla(byval hSci as HWND)
+  dim as WNDPROC cur, prev
+  if hSci = 0 then exit sub
+  cur = cast(WNDPROC, GetWindowLongPtr(hSci, GWLP_WNDPROC))
+  if cur = @SciSubclassProc then exit sub
+  prev = cast(WNDPROC, SetWindowLongPtr(hSci, GWLP_WNDPROC, cast(LONG_PTR, @SciSubclassProc)))
+  if oldSciProc = 0 then oldSciProc = prev
+end sub
+
+sub EnsureSciHooked()
+  HookScintilla(nppData._scintillaMainHandle)
+  HookScintilla(nppData._scintillaSecondHandle)
+end sub
+
+sub UnhookSci()
+  if oldSciProc = 0 then exit sub
+  if nppData._scintillaMainHandle <> 0 then
+    if cast(WNDPROC, GetWindowLongPtr(nppData._scintillaMainHandle, GWLP_WNDPROC)) = @SciSubclassProc then
+      SetWindowLongPtr(nppData._scintillaMainHandle, GWLP_WNDPROC, cast(LONG_PTR, oldSciProc))
+    end if
+  end if
+  if nppData._scintillaSecondHandle <> 0 then
+    if cast(WNDPROC, GetWindowLongPtr(nppData._scintillaSecondHandle, GWLP_WNDPROC)) = @SciSubclassProc then
+      SetWindowLongPtr(nppData._scintillaSecondHandle, GWLP_WNDPROC, cast(LONG_PTR, oldSciProc))
+    end if
+  end if
+  oldSciProc = 0
+end sub
+
+function CopyTextToClipboard(byref sText as string) as boolean
+  dim as integer cch, cbBytes
+  dim as HGLOBAL hMem
+  dim as wstring ptr pMem
+  if Len(sText) = 0 then return FALSE
+  if OpenClipboard(nppData._nppHandle) = FALSE then return FALSE
+  EmptyClipboard()
+
+  cch = MultiByteToWideChar(CP_UTF8, 0, strptr(sText), Len(sText), 0, 0)
+  if cch <= 0 then
+    CloseClipboard()
+    return FALSE
+  end if
+  cbBytes = (cch + 1) * sizeof(wstring)
+  hMem = GlobalAlloc(GMEM_MOVEABLE, cbBytes)
+  if hMem = 0 then
+    CloseClipboard()
+    return FALSE
+  end if
+  pMem = cast(wstring ptr, GlobalLock(hMem))
+  if pMem = 0 then
+    GlobalFree(hMem)
+    CloseClipboard()
+    return FALSE
+  end if
+  MultiByteToWideChar(CP_UTF8, 0, strptr(sText), Len(sText), pMem, cch)
+  pMem[cch] = 0
+  GlobalUnlock(hMem)
+  if SetClipboardData(CF_UNICODETEXT, hMem) = 0 then
+    GlobalFree(hMem)
+    CloseClipboard()
+    return FALSE
+  end if
+  CloseClipboard()
+  return TRUE
+end function
+
+function CopyResultForLine(byval hScintilla as HWND, byval lineIdx as integer) as boolean
+  dim as string sRes, sCopy
+  if (lineIdx >= 0) andalso (lineIdx <= ubound(g_annText)) then
+    sRes = g_annText(lineIdx)
+  end if
+  if Len(Trim(sRes)) = 0 then sRes = GetEolAnnotationText(hScintilla, lineIdx)
+  if Len(Trim(sRes)) = 0 then return FALSE
+  sCopy = NormalizeCopiedResult(sRes)
+  if Len(sCopy) = 0 then return FALSE
+  return CopyTextToClipboard(sCopy)
+end function
+
 sub SetLineAnnotation(byval hScintilla as HWND, byval lineIdx as integer, byval padding as integer, byref sText as string)
   dim as string sResText = space(padding) & sText
+  if (lineIdx >= 0) andalso (lineIdx <= ubound(g_annText)) then
+    g_annText(lineIdx) = sResText
+  end if
   SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, cast(LPARAM, strptr(sResText)))
 end sub
 
@@ -106,12 +307,10 @@ sub UpdateAnnotations()
   if Config_IsFileEnabled(GetCurrentPath()) = FALSE then exit sub
 
   dim as HWND hScintilla = GetCurrentScintilla()
-  dim as integer i, nLines, oldMask, lineBufLen, lineContentLen
+  dim as integer i, nLines, oldMask, lineContentLen
   dim as integer maxContentLen = 0, padding = 0
   dim as integer iStart, iEnd
-  dim as RawResult raw
-  dim as zstring ptr pLineBuf
-  dim as string sLine, sResText, sErr
+  dim as string sLine, sResText
   
   if hScintilla = 0 then exit sub
 
@@ -124,7 +323,9 @@ sub UpdateAnnotations()
   Parser_SetSupportComplexNumbers(TRUE)
 
   nLines = SendMessage(hScintilla, SCI_GETLINECOUNT, 0, 0)
-  
+  if nLines < 1 then nLines = 1
+  redim g_annText(0 to nLines - 1)
+
   for i = 0 to nLines - 1
     iStart = SendMessage(hScintilla, SCI_POSITIONFROMLINE, i, 0)
     iEnd = SendMessage(hScintilla, SCI_GETLINEENDPOSITION, i, 0)
@@ -133,35 +334,14 @@ sub UpdateAnnotations()
   next i
 
   for i = 0 to nLines - 1
-    lineBufLen = SendMessage(hScintilla, SCI_LINELENGTH, i, 0)
     iStart = SendMessage(hScintilla, SCI_POSITIONFROMLINE, i, 0)
     iEnd = SendMessage(hScintilla, SCI_GETLINEENDPOSITION, i, 0)
     lineContentLen = iEnd - iStart
-
-    if lineBufLen > 0 then
-      pLineBuf = callocate(lineBufLen + 1)
-      SendMessage(hScintilla, SCI_GETLINE, i, cast(LPARAM, pLineBuf))
-      if lineContentLen < lineBufLen then
-        pLineBuf[lineContentLen] = 0
-      else
-        pLineBuf[lineBufLen] = 0
-      end if
-      sLine = *pLineBuf
-      
-      if Parser_TryEvaluateExRaw(sLine, raw) then
-        sResText = FormatRawEvaluationResult(raw)
-        if Len(sResText) > 0 then
-          padding = maxContentLen - lineContentLen + 5
-          SetLineAnnotation(hScintilla, i, padding, sResText)
-        end if
-      else
-        sErr = Parser_GetLastError()
-        if Parser_IsFunctionHintError(sErr) then
-          padding = maxContentLen - lineContentLen + 5
-          SetLineAnnotation(hScintilla, i, padding, SMARTMATH_ERROR_PREFIX & sErr)
-        end if
-      end if
-      deallocate(pLineBuf)
+    sLine = GetScintillaLineText(hScintilla, i)
+    sResText = DisplayTextFromEval(sLine)
+    if Len(sResText) > 0 then
+      padding = maxContentLen - lineContentLen + 5
+      SetLineAnnotation(hScintilla, i, padding, sResText)
     end if
   next i
   SendMessage(hScintilla, SCI_SETMODEVENTMASK, oldMask, 0)
@@ -259,6 +439,7 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     Config_Init(nppData._nppHandle)
     Config_Load()
     OrganizeMenu()
+    EnsureSciHooked()
     UpdateUIState()
     
   elseif pNotify->nmhdr.code = NPPN_TBMODIFICATION then
@@ -297,8 +478,10 @@ sub beNotified(byval pNotify as SCNotification ptr) export
   elseif pNotify->nmhdr.code = SCN_MODIFIED then
     if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations()
     
-  elseif pNotify->nmhdr.code = NPPN_BEFORESHUTDOWN then
+  elseif pNotify->nmhdr.code = NPPN_BEFORESHUTDOWN _
+      orelse pNotify->nmhdr.code = NPPN_SHUTDOWN then
     isNppClosing = TRUE
+    UnhookSci()
     
   elseif pNotify->nmhdr.code = NPPN_FILEBEFORECLOSE then
     if isNppClosing = FALSE then

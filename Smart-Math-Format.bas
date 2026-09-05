@@ -17,7 +17,7 @@ dim shared g_sDecimalSeparator as String
 dim shared g_sThousandsSeparator as String
 dim shared g_sArrayOutputSeparator as String
 
-private sub SyncFormatSettings()
+sub SyncFormatSettings()
   g_nDecimals = Config_GetDecimalPlaces()
   if Len(g_sDecimalSeparator) = 0 then g_sDecimalSeparator = SMARTMATH_DECIMAL_SEPARATOR_DEFAULT
   if Len(g_sThousandsSeparator) = 0 then g_sThousandsSeparator = SMARTMATH_THOUSANDS_SEPARATOR_DEFAULT
