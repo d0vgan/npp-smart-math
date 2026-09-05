@@ -9,6 +9,7 @@ const NPPM_GETPLUGINSCONFIGDIR = (WM_USER + 1000 + 46)
 dim shared as wstring * MAX_PATH iniFilePath
 dim shared as integer storedDecimalPlaces = 2
 dim shared as boolean storedSupportComplexNumbers = FALSE
+dim shared as boolean storedShowErrors = FALSE
 dim shared as string enabledFiles()
 dim shared as HWND hNppWnd
 
@@ -40,6 +41,14 @@ end sub
 
 function Config_GetSupportComplexNumbers() as boolean
   return storedSupportComplexNumbers
+end function
+
+sub Config_SetShowErrors(byval enabled as boolean)
+  storedShowErrors = enabled
+end sub
+
+function Config_GetShowErrors() as boolean
+  return storedShowErrors
 end function
 
 function Config_IsFileEnabled(path as string) as boolean
@@ -109,6 +118,7 @@ sub Config_Save()
   
   WritePrivateProfileString(wstr("Settings"), wstr("DecimalPlaces"), wstr(str(storedDecimalPlaces)), iniFilePath)
   WritePrivateProfileString(wstr("Settings"), wstr("ComplexNumbers"), wstr(iif(storedSupportComplexNumbers, "1", "0")), iniFilePath)
+  WritePrivateProfileString(wstr("Settings"), wstr("ShowErrors"), wstr(iif(storedShowErrors, "1", "0")), iniFilePath)
   
   for i = lbound(enabledFiles) to ubound(enabledFiles)
     if len(enabledFiles(i)) > 0 then
@@ -125,6 +135,7 @@ sub Config_Load()
   if storedDecimalPlaces < 0 then storedDecimalPlaces = 0
   if storedDecimalPlaces > 8 then storedDecimalPlaces = 8
   storedSupportComplexNumbers = (GetPrivateProfileInt(wstr("Settings"), wstr("ComplexNumbers"), 0, iniFilePath) <> 0)
+  storedShowErrors = (GetPrivateProfileInt(wstr("Settings"), wstr("ShowErrors"), 0, iniFilePath) <> 0)
   
   dim as zstring * 32768 buffer
   GetPrivateProfileString(wstr("Settings"), wstr("ActiveTabs"), wstr(""), @buffer, 32768, iniFilePath)

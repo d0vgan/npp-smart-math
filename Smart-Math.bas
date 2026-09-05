@@ -10,7 +10,7 @@ const PLUGIN_NAME = wstr("Smart Math Plugin")
 const TB_BMP_ID = 100
 const TB_ICON_LIGHT_ID = 101
 const TB_ICON_DARK_ID = 102
-const NB_FUNC = 11
+const NB_FUNC = 12
 const SCI_GETFIRSTVISIBLELINE = 2152
 const SCI_GETLINECOUNT = 2154
 const SCI_GETLINE = 2153
@@ -25,10 +25,19 @@ const SCI_TEXTHEIGHT = 2279
 const SCI_DOCLINEFROMVISIBLE = 2221
 const SCI_EOLANNOTATIONSETTEXT = 2740
 const SCI_EOLANNOTATIONGETTEXT = 2741
+const SCI_EOLANNOTATIONSETSTYLE = 2742
 const SCI_EOLANNOTATIONCLEARALL = 2744
 const SCI_EOLANNOTATIONSETVISIBLE = 2745
+const SCI_EOLANNOTATIONSETSTYLEOFFSET = 2747
+const SCI_EOLANNOTATIONGETSTYLEOFFSET = 2748
+const SCI_STYLESETFORE = 2051
+const SCI_STYLEGETFORE = 2481
+const SCI_ALLOCATEEXTENDEDSTYLES = 2553
 const SCI_GETMODEVENTMASK = 2378
 const SCI_SETMODEVENTMASK = 2359
+const STYLE_BRACEBAD = 35
+const ANN_STYLE_DEFAULT = 0
+const ANN_STYLE_ERROR = 1
 const EOLANNOTATION_STANDARD = 1
 const EOLANNOTATION_HIDDEN = 0
 const SCN_DOUBLECLICK = 2006
@@ -106,6 +115,7 @@ sub OrganizeMenu()
   DrawMenuBar(nppData._nppHandle)
   SetPrecision(Config_GetDecimalPlaces())
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(10)._cmdID, iif(Config_GetSupportComplexNumbers(), 1, 0))
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(11)._cmdID, iif(Config_GetShowErrors(), 1, 0))
 end sub
 
 function GetCurrentPath() as string
@@ -155,7 +165,10 @@ function DisplayTextFromEval(byref sLine as string) as string
     if Len(sRes) > 0 then return sRes
   else
     sErr = Parser_GetLastError()
-    if Parser_IsFunctionHintError(sErr) then return SMARTMATH_ERROR_PREFIX & sErr
+    if Len(sErr) = 0 then return ""
+    if Config_GetShowErrors() orelse Parser_IsFunctionHintError(sErr) then
+      return SMARTMATH_ERROR_PREFIX & sErr
+    end if
   end if
   return ""
 end function
@@ -296,6 +309,30 @@ function CopyTextToClipboard(byref sText as string) as boolean
   return TRUE
 end function
 
+sub EnsureErrorAnnotationStyle(byval hScintilla as HWND)
+  dim as integer styleOffset, badFore
+  if hScintilla = 0 then exit sub
+  styleOffset = SendMessage(hScintilla, SCI_EOLANNOTATIONGETSTYLEOFFSET, 0, 0)
+  if styleOffset = 0 then
+    styleOffset = SendMessage(hScintilla, SCI_ALLOCATEEXTENDEDSTYLES, 2, 0)
+    if styleOffset > 0 then
+      SendMessage(hScintilla, SCI_EOLANNOTATIONSETSTYLEOFFSET, styleOffset, 0)
+    end if
+  end if
+  if styleOffset > 0 then
+    badFore = SendMessage(hScintilla, SCI_STYLEGETFORE, STYLE_BRACEBAD, 0)
+    SendMessage(hScintilla, SCI_STYLESETFORE, styleOffset + ANN_STYLE_ERROR, badFore)
+  end if
+end sub
+
+function AnnotationStyleForText(byref sText as string) as integer
+  dim as string sErr
+  if Left(sText, Len(SMARTMATH_ERROR_PREFIX)) <> SMARTMATH_ERROR_PREFIX then return ANN_STYLE_DEFAULT
+  sErr = Mid(sText, Len(SMARTMATH_ERROR_PREFIX) + 1)
+  if Parser_IsFunctionHintError(sErr) then return ANN_STYLE_DEFAULT
+  return ANN_STYLE_ERROR
+end function
+
 function CopyResultForLine(byval hScintilla as HWND, byval lineIdx as integer) as boolean
   dim as string sRes, sCopy
   if (lineIdx >= 0) andalso (lineIdx <= ubound(g_annText)) then
@@ -310,11 +347,20 @@ end function
 
 sub SetLineAnnotation(byval hScintilla as HWND, byval lineIdx as integer, byval padding as integer, byref sText as string)
   dim as string sResText = space(padding) & sText
+  dim as integer annStyle = AnnotationStyleForText(sText)
   if (lineIdx >= 0) andalso (lineIdx <= ubound(g_annText)) then
-    if g_annText(lineIdx) = sResText then exit sub
-    g_annText(lineIdx) = sResText
+    if g_annText(lineIdx) <> sResText then
+      g_annText(lineIdx) = sResText
+      SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, cast(LPARAM, strptr(sResText)))
+    end if
+  else
+    SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, cast(LPARAM, strptr(sResText)))
   end if
-  SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, cast(LPARAM, strptr(sResText)))
+  if (annStyle = ANN_STYLE_ERROR) andalso _
+     (SendMessage(hScintilla, SCI_EOLANNOTATIONGETSTYLEOFFSET, 0, 0) = 0) then
+    annStyle = ANN_STYLE_DEFAULT
+  end if
+  SendMessage(hScintilla, SCI_EOLANNOTATIONSETSTYLE, lineIdx, annStyle)
 end sub
 
 sub ClearLineAnnotation(byval hScintilla as HWND, byval lineIdx as integer)
@@ -341,6 +387,7 @@ sub UpdateAnnotations(byval forceFull as boolean = FALSE)
   dim as RawResult raw
   
   if hScintilla = 0 then exit sub
+  EnsureErrorAnnotationStyle(hScintilla)
 
   nLines = SendMessage(hScintilla, SCI_GETLINECOUNT, 0, 0)
   if nLines < 1 then nLines = 1
@@ -456,6 +503,14 @@ sub ToggleComplexNumbers cdecl()
   if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
 end sub
 
+sub ToggleShowErrors cdecl()
+  dim as boolean enabled = not Config_GetShowErrors()
+  Config_SetShowErrors(enabled)
+  Config_Save()
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(11)._cmdID, iif(enabled, 1, 0))
+  if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
+end sub
+
 extern "C"
 
 sub setInfo(byval notpadPlusData as NppData) export
@@ -502,6 +557,14 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
     ._init2Check = FALSE
     ._pShKey = NULL
   end with
+
+  with funcItems(11)
+    ._itemName = "Show Errors"
+    ._pFunc = @ToggleShowErrors
+    ._cmdID = 0
+    ._init2Check = FALSE
+    ._pShKey = NULL
+  end with
   return @funcItems(0)
 end function
 
@@ -542,6 +605,13 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     
   elseif pNotify->nmhdr.code = NPPN_BUFFERACTIVATED then
     UpdateUIState()
+    
+  elseif pNotify->nmhdr.code = NPPN_WORDSTYLESUPDATED _
+      orelse pNotify->nmhdr.code = NPPN_LANGCHANGED then
+    if Config_IsFileEnabled(GetCurrentPath()) then
+      dim as HWND hSciTheme = GetCurrentScintilla()
+      if hSciTheme <> 0 then EnsureErrorAnnotationStyle(hSciTheme)
+    end if
     
   elseif pNotify->nmhdr.code = SCN_MODIFIED then
     if (pNotify->modificationType and SC_MOD_TEXT_FLAGS) <> 0 then

@@ -15,6 +15,8 @@ declare sub Config_SetDecimalPlaces(p as integer)
 declare function Config_GetDecimalPlaces() as integer
 declare sub Config_SetSupportComplexNumbers(byval enabled as boolean)
 declare function Config_GetSupportComplexNumbers() as boolean
+declare sub Config_SetShowErrors(byval enabled as boolean)
+declare function Config_GetShowErrors() as boolean
 
 ' Gestion de Archivos Habilitados
 declare function Config_IsFileEnabled(path as string) as boolean
