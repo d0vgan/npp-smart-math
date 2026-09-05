@@ -31,6 +31,9 @@ const EOLANNOTATION_STANDARD = 1
 const EOLANNOTATION_HIDDEN = 0
 const SCN_DOUBLECLICK = 2006
 const SCN_MODIFIED = 2008
+const SC_MOD_INSERTTEXT = &h1
+const SC_MOD_DELETETEXT = &h2
+const SC_MOD_TEXT_FLAGS = (SC_MOD_INSERTTEXT or SC_MOD_DELETETEXT)
 #ifndef CF_UNICODETEXT
 const CF_UNICODETEXT = 13
 #endif
@@ -45,9 +48,13 @@ dim shared as NppData nppData
 dim shared as FuncItem funcItems(NB_FUNC - 1)
 dim shared as boolean isNppClosing = FALSE
 dim shared as WNDPROC oldSciProc = 0
+dim shared as boolean g_cacheReady = FALSE
+dim shared as string g_cachePath
 redim shared g_annText(0 to 0) as string
+redim shared g_cachedLineText(0 to 0) as string
+redim shared g_cachedResult(0 to 0) as string
 
-declare sub UpdateAnnotations()
+declare sub UpdateAnnotations(byval forceFull as boolean = FALSE)
 declare sub SetPrecision(p as integer)
 declare function CopyResultForLine(byval hScintilla as HWND, byval lineIdx as integer) as boolean
 declare function SciSubclassProc(byval hWnd as HWND, byval uMsg as UINT, byval wParam as WPARAM, byval lParam as LPARAM) as LRESULT
@@ -298,52 +305,93 @@ end function
 sub SetLineAnnotation(byval hScintilla as HWND, byval lineIdx as integer, byval padding as integer, byref sText as string)
   dim as string sResText = space(padding) & sText
   if (lineIdx >= 0) andalso (lineIdx <= ubound(g_annText)) then
+    if g_annText(lineIdx) = sResText then exit sub
     g_annText(lineIdx) = sResText
   end if
   SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, cast(LPARAM, strptr(sResText)))
 end sub
 
-sub UpdateAnnotations()
-  if Config_IsFileEnabled(GetCurrentPath()) = FALSE then exit sub
+sub ClearLineAnnotation(byval hScintilla as HWND, byval lineIdx as integer)
+  if (lineIdx >= 0) andalso (lineIdx <= ubound(g_annText)) then
+    if Len(g_annText(lineIdx)) = 0 then exit sub
+    g_annText(lineIdx) = ""
+  end if
+  SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, 0)
+end sub
+
+sub InvalidateAnnotationCache()
+  g_cacheReady = FALSE
+  g_cachePath = ""
+end sub
+
+sub UpdateAnnotations(byval forceFull as boolean = FALSE)
+  dim as string curPath = GetCurrentPath()
+  if Config_IsFileEnabled(curPath) = FALSE then exit sub
 
   dim as HWND hScintilla = GetCurrentScintilla()
-  dim as integer i, nLines, oldMask, lineContentLen
+  dim as integer i, nLines, oldMask, oldCount, firstChanged
   dim as integer maxContentLen = 0, padding = 0
   dim as integer iStart, iEnd
-  dim as string sLine, sResText
+  dim as RawResult raw
   
   if hScintilla = 0 then exit sub
 
+  nLines = SendMessage(hScintilla, SCI_GETLINECOUNT, 0, 0)
+  if nLines < 1 then nLines = 1
+
+  redim curLines(0 to nLines - 1) as string
+  redim curLens(0 to nLines - 1) as integer
+  for i = 0 to nLines - 1
+    iStart = SendMessage(hScintilla, SCI_POSITIONFROMLINE, i, 0)
+    iEnd = SendMessage(hScintilla, SCI_GETLINEENDPOSITION, i, 0)
+    curLens(i) = iEnd - iStart
+    if curLens(i) > maxContentLen then maxContentLen = curLens(i)
+    curLines(i) = GetScintillaLineText(hScintilla, i)
+  next i
+
+  oldCount = 0
+  if g_cacheReady andalso (g_cachePath = curPath) then oldCount = ubound(g_cachedLineText) + 1
+  firstChanged = 0
+  if (forceFull = FALSE) andalso (oldCount = nLines) then
+    firstChanged = -1
+    for i = 0 to nLines - 1
+      if curLines(i) <> g_cachedLineText(i) then
+        firstChanged = i
+        exit for
+      end if
+    next i
+    if firstChanged < 0 then exit sub
+  end if
+
   oldMask = SendMessage(hScintilla, SCI_GETMODEVENTMASK, 0, 0)
   SendMessage(hScintilla, SCI_SETMODEVENTMASK, 0, 0)
-  SendMessage(hScintilla, SCI_EOLANNOTATIONCLEARALL, 0, 0)
   SendMessage(hScintilla, SCI_EOLANNOTATIONSETVISIBLE, EOLANNOTATION_STANDARD, 0)
-  
+
   Parser_ClearVariables()
   Parser_SetSupportComplexNumbers(TRUE)
 
-  nLines = SendMessage(hScintilla, SCI_GETLINECOUNT, 0, 0)
-  if nLines < 1 then nLines = 1
-  redim g_annText(0 to nLines - 1)
+  redim preserve g_cachedLineText(0 to nLines - 1)
+  redim preserve g_cachedResult(0 to nLines - 1)
+  redim preserve g_annText(0 to nLines - 1)
 
   for i = 0 to nLines - 1
-    iStart = SendMessage(hScintilla, SCI_POSITIONFROMLINE, i, 0)
-    iEnd = SendMessage(hScintilla, SCI_GETLINEENDPOSITION, i, 0)
-    lineContentLen = iEnd - iStart
-    if lineContentLen > maxContentLen then maxContentLen = lineContentLen
-  next i
+    if i < firstChanged then
+      Parser_TryEvaluateExRaw(curLines(i), raw)
+    else
+      g_cachedResult(i) = DisplayTextFromEval(curLines(i))
+    end if
+    g_cachedLineText(i) = curLines(i)
 
-  for i = 0 to nLines - 1
-    iStart = SendMessage(hScintilla, SCI_POSITIONFROMLINE, i, 0)
-    iEnd = SendMessage(hScintilla, SCI_GETLINEENDPOSITION, i, 0)
-    lineContentLen = iEnd - iStart
-    sLine = GetScintillaLineText(hScintilla, i)
-    sResText = DisplayTextFromEval(sLine)
-    if Len(sResText) > 0 then
-      padding = maxContentLen - lineContentLen + 5
-      SetLineAnnotation(hScintilla, i, padding, sResText)
+    if Len(g_cachedResult(i)) > 0 then
+      padding = maxContentLen - curLens(i) + 5
+      SetLineAnnotation(hScintilla, i, padding, g_cachedResult(i))
+    else
+      ClearLineAnnotation(hScintilla, i)
     end if
   next i
+
+  g_cacheReady = TRUE
+  g_cachePath = curPath
   SendMessage(hScintilla, SCI_SETMODEVENTMASK, oldMask, 0)
 end sub
 
@@ -361,6 +409,7 @@ sub UpdateUIState()
       SendMessage(hScintilla, SCI_EOLANNOTATIONCLEARALL, 0, 0)
       SendMessage(hScintilla, SCI_EOLANNOTATIONSETVISIBLE, EOLANNOTATION_HIDDEN, 0)
     end if
+    InvalidateAnnotationCache()
   end if
 end sub
 
@@ -380,7 +429,7 @@ sub SetPrecision(p as integer)
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(p + 1)._cmdID, 1)
   
   Config_Save()
-  if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations()
+  if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
 end sub
 
 sub SetPrec0 cdecl() : SetPrecision(0) : end sub
@@ -440,6 +489,7 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     Config_Load()
     OrganizeMenu()
     EnsureSciHooked()
+    SendMessage(nppData._nppHandle, NPPM_ADDSCNMODIFIEDFLAGS, 0, SC_MOD_TEXT_FLAGS)
     UpdateUIState()
     
   elseif pNotify->nmhdr.code = NPPN_TBMODIFICATION then
@@ -471,12 +521,10 @@ sub beNotified(byval pNotify as SCNotification ptr) export
   elseif pNotify->nmhdr.code = NPPN_BUFFERACTIVATED then
     UpdateUIState()
     
-  elseif pNotify->nmhdr.code = NPPN_WORDSTYLESUPDATED _
-      orelse pNotify->nmhdr.code = NPPN_LANGCHANGED then
-    if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations()
-    
   elseif pNotify->nmhdr.code = SCN_MODIFIED then
-    if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations()
+    if (pNotify->modificationType and SC_MOD_TEXT_FLAGS) <> 0 then
+      if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations()
+    end if
     
   elseif pNotify->nmhdr.code = NPPN_BEFORESHUTDOWN _
       orelse pNotify->nmhdr.code = NPPN_SHUTDOWN then
