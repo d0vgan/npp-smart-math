@@ -49,7 +49,7 @@ redim shared g_cachedResult(0 to 0) as string
 declare sub UpdateAnnotations(byval forceFull as boolean = FALSE, byval startLine as integer = -1)
 declare function getSmartMathUdlId() as integer
 declare sub ApplySmartMathUDL()
-declare sub SetPrecision(p as integer)
+declare sub SetPrecision(p as integer, byval saveConfig as boolean)
 declare function CopyResultForLine(byval hScintilla as HWND, byval lineIdx as integer) as boolean
 declare function SciSubclassProc(byval hWnd as HWND, byval uMsg as UINT, byval wParam as WPARAM, byval lParam as LPARAM) as LRESULT
 
@@ -143,7 +143,7 @@ sub OrganizeMenu()
   ModifyMenu(hMyMenu, funcItems(IDX_SEPARATOR1)._cmdID, MF_BYCOMMAND or MF_SEPARATOR, funcItems(IDX_SEPARATOR1)._cmdID, NULL)
   ModifyMenu(hMyMenu, funcItems(IDX_SEPARATOR2)._cmdID, MF_BYCOMMAND or MF_SEPARATOR, funcItems(IDX_SEPARATOR2)._cmdID, NULL)
   DrawMenuBar(nppData._nppHandle)
-  SetPrecision(Config_GetDecimalPlaces())
+  SetPrecision(Config_GetDecimalPlaces(), FALSE)
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_COMPLEX)._cmdID, iif(Config_GetSupportComplexNumbers(), 1, 0))
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_SHOWERRORS)._cmdID, iif(Config_GetShowErrors(), 1, 0))
 end sub
@@ -506,12 +506,13 @@ end sub
 
 sub TogglePlugin cdecl()
   dim as string curPath = GetCurrentPath()
+  ' MessageBoxA(nppData._nppHandle, curPath, "Smart Math Toggle", MB_OK or MB_ICONWARNING)
   Config_ToggleFile(curPath)
   Config_Save()
   UpdateUIState()
 end sub
 
-sub SetPrecision(p as integer)
+sub SetPrecision(p as integer, byval saveConfig as boolean)
   Config_SetDecimalPlaces(p)
   dim as integer i
   for i = 0 to 8
@@ -519,19 +520,19 @@ sub SetPrecision(p as integer)
   next i
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_PREC0 + p)._cmdID, 1)
   
-  Config_Save()
+  if saveConfig then Config_Save()
   if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
 end sub
 
-sub SetPrec0 cdecl() : SetPrecision(0) : end sub
-sub SetPrec1 cdecl() : SetPrecision(1) : end sub
-sub SetPrec2 cdecl() : SetPrecision(2) : end sub
-sub SetPrec3 cdecl() : SetPrecision(3) : end sub
-sub SetPrec4 cdecl() : SetPrecision(4) : end sub
-sub SetPrec5 cdecl() : SetPrecision(5) : end sub
-sub SetPrec6 cdecl() : SetPrecision(6) : end sub
-sub SetPrec7 cdecl() : SetPrecision(7) : end sub
-sub SetPrec8 cdecl() : SetPrecision(8) : end sub
+sub SetPrec0 cdecl() : SetPrecision(0, TRUE) : end sub
+sub SetPrec1 cdecl() : SetPrecision(1, TRUE) : end sub
+sub SetPrec2 cdecl() : SetPrecision(2, TRUE) : end sub
+sub SetPrec3 cdecl() : SetPrecision(3, TRUE) : end sub
+sub SetPrec4 cdecl() : SetPrecision(4, TRUE) : end sub
+sub SetPrec5 cdecl() : SetPrecision(5, TRUE) : end sub
+sub SetPrec6 cdecl() : SetPrecision(6, TRUE) : end sub
+sub SetPrec7 cdecl() : SetPrecision(7, TRUE) : end sub
+sub SetPrec8 cdecl() : SetPrecision(8, TRUE) : end sub
 
 sub ToggleComplexNumbers cdecl()
   dim as boolean enabled = not Config_GetSupportComplexNumbers()
