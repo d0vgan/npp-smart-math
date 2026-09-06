@@ -20,8 +20,8 @@ SmartMath evaluates math expressions inside Notepad++.
 
 ### Activate the Smart Math Plugin
 
-To enable calculations in your current document, check "Smart Math Plugin" under the Smart Math menu.
-SmartMath remembers which documents (tabs) have "Smart Math Plugin" checked.
+To enable calculations in your current document, check "Smart Math" under the Smart Math menu.
+SmartMath remembers which documents (tabs) have "Smart Math" checked.
 
 ### Copying Math Results to the Clipboard
 

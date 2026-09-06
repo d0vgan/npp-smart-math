@@ -7,7 +7,7 @@
 #include "Inc\Smart-Math-Format.bi"
 #include "Inc\Smart-Math-CopyNormalize.bi"
 
-const PLUGIN_NAME = wstr("Smart Math Plugin")
+const PLUGIN_NAME = wstr("Smart Math")
 const DOCUMENTATION_FILE_NAME = wstr("SmartMath.md")
 const UDL_NAME = wstr("SmartMath")
 const TB_BMP_ID = 100
@@ -550,6 +550,12 @@ sub ToggleShowErrors cdecl()
 end sub
 
 sub ShowDocumentation cdecl()
+  dim as wstring * (MAX_PATH + 64) sMsg
+  if GetFileAttributesW(@documentationFilePath) = INVALID_FILE_ATTRIBUTES then
+    sMsg = wstr("The file does not exist:") & wchr(13) & wchr(10) & documentationFilePath
+    MessageBoxW(nppData._nppHandle, @sMsg, PLUGIN_NAME, MB_OK or MB_ICONWARNING)
+    exit sub
+  end if
   SendMessage(nppData._nppHandle, NPPM_DOOPEN, 0, cast(LPARAM, @documentationFilePath))
 end sub
 
@@ -565,7 +571,7 @@ end function
 
 function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
   *nbF = NB_FUNC
-  dim as wstring * 64 sMainName = "Smart Math Plugin"
+  dim as wstring * 64 sMainName = "Smart Math"
   
   with funcItems(IDX_TOGGLE)
     ._itemName = sMainName
