@@ -20,6 +20,7 @@ const SCI_GETFIRSTVISIBLELINE = 2152
 const SCI_GETLINECOUNT = 2154
 const SCI_GETLINE = 2153
 const SCI_LINELENGTH = 2350
+const SCI_LINEFROMPOSITION = 2166
 const SCI_POSITIONFROMLINE = 2167
 const SCI_GETCURRENTPOS = 2008
 const SCI_SETEMPTYSELECTION = 2556
@@ -70,7 +71,7 @@ redim shared g_annText(0 to 0) as string
 redim shared g_cachedLineText(0 to 0) as string
 redim shared g_cachedResult(0 to 0) as string
 
-declare sub UpdateAnnotations(byval forceFull as boolean = FALSE)
+declare sub UpdateAnnotations(byval forceFull as boolean = FALSE, byval startLine as integer = -1)
 declare sub SetPrecision(p as integer)
 declare function CopyResultForLine(byval hScintilla as HWND, byval lineIdx as integer) as boolean
 declare function SciSubclassProc(byval hWnd as HWND, byval uMsg as UINT, byval wParam as WPARAM, byval lParam as LPARAM) as LRESULT
@@ -382,15 +383,16 @@ sub InvalidateAnnotationCache()
   g_cachePath = ""
 end sub
 
-sub UpdateAnnotations(byval forceFull as boolean = FALSE)
+sub UpdateAnnotations(byval forceFull as boolean = FALSE, byval startLine as integer = -1)
   dim as string curPath = GetCurrentPath()
   if Config_IsFileEnabled(curPath) = FALSE then exit sub
 
   dim as HWND hScintilla = GetCurrentScintilla()
   dim as integer i, nLines, oldMask, oldCount, firstChanged
-  dim as integer maxContentLen = 0, padding = 0
-  dim as integer iStart, iEnd
+  dim as integer maxContentLen = 0, padding = 0, lineLen
+  dim as boolean cacheOk
   dim as RawResult raw
+  dim as string sLine
   
   if hScintilla = 0 then exit sub
   EnsureErrorAnnotationStyle(hScintilla)
@@ -398,28 +400,27 @@ sub UpdateAnnotations(byval forceFull as boolean = FALSE)
   nLines = SendMessage(hScintilla, SCI_GETLINECOUNT, 0, 0)
   if nLines < 1 then nLines = 1
 
-  redim curLines(0 to nLines - 1) as string
-  redim curLens(0 to nLines - 1) as integer
-  for i = 0 to nLines - 1
-    iStart = SendMessage(hScintilla, SCI_POSITIONFROMLINE, i, 0)
-    iEnd = SendMessage(hScintilla, SCI_GETLINEENDPOSITION, i, 0)
-    curLens(i) = iEnd - iStart
-    if curLens(i) > maxContentLen then maxContentLen = curLens(i)
-    curLines(i) = GetScintillaLineText(hScintilla, i)
-  next i
-
   oldCount = 0
-  if g_cacheReady andalso (g_cachePath = curPath) then oldCount = ubound(g_cachedLineText) + 1
+  cacheOk = (g_cacheReady andalso (g_cachePath = curPath))
+  if cacheOk then oldCount = ubound(g_cachedLineText) + 1
+
   firstChanged = 0
-  if (forceFull = FALSE) andalso (oldCount = nLines) then
-    firstChanged = -1
-    for i = 0 to nLines - 1
-      if curLines(i) <> g_cachedLineText(i) then
-        firstChanged = i
-        exit for
-      end if
-    next i
-    if firstChanged < 0 then exit sub
+  if (forceFull = FALSE) andalso cacheOk then
+    if startLine >= 0 then
+      firstChanged = startLine
+      if firstChanged > nLines - 1 then firstChanged = nLines - 1
+      if firstChanged > oldCount then firstChanged = 0
+    elseif oldCount = nLines then
+      firstChanged = -1
+      for i = 0 to nLines - 1
+        sLine = GetScintillaLineText(hScintilla, i)
+        if sLine <> g_cachedLineText(i) then
+          firstChanged = i
+          exit for
+        end if
+      next i
+      if firstChanged < 0 then exit sub
+    end if
   end if
 
   oldMask = SendMessage(hScintilla, SCI_GETMODEVENTMASK, 0, 0)
@@ -433,16 +434,23 @@ sub UpdateAnnotations(byval forceFull as boolean = FALSE)
   redim preserve g_cachedResult(0 to nLines - 1)
   redim preserve g_annText(0 to nLines - 1)
 
-  for i = 0 to nLines - 1
-    if i < firstChanged then
-      Parser_TryEvaluateExRaw(curLines(i), raw)
-    else
-      g_cachedResult(i) = DisplayTextFromEval(curLines(i))
-    end if
-    g_cachedLineText(i) = curLines(i)
+  for i = 0 to firstChanged - 1
+    Parser_TryEvaluateExRaw(g_cachedLineText(i), raw)
+    lineLen = Len(g_cachedLineText(i))
+    if lineLen > maxContentLen then maxContentLen = lineLen
+  next i
 
+  for i = firstChanged to nLines - 1
+    sLine = GetScintillaLineText(hScintilla, i)
+    lineLen = Len(sLine)
+    if lineLen > maxContentLen then maxContentLen = lineLen
+    g_cachedLineText(i) = sLine
+    g_cachedResult(i) = DisplayTextFromEval(sLine)
+  next i
+
+  for i = firstChanged to nLines - 1
     if Len(g_cachedResult(i)) > 0 then
-      padding = maxContentLen - curLens(i) + 5
+      padding = maxContentLen - Len(g_cachedLineText(i)) + 5
       SetLineAnnotation(hScintilla, i, padding, g_cachedResult(i))
     else
       ClearLineAnnotation(hScintilla, i)
@@ -629,7 +637,14 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     
   elseif pNotify->nmhdr.code = SCN_MODIFIED then
     if (pNotify->modificationType and SC_MOD_TEXT_FLAGS) <> 0 then
-      if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations()
+      if Config_IsFileEnabled(GetCurrentPath()) then
+        dim as HWND hSciMod = GetCurrentScintilla()
+        dim as integer startLine = 0
+        if hSciMod <> 0 then
+          startLine = SendMessage(hSciMod, SCI_LINEFROMPOSITION, pNotify->position, 0)
+        end if
+        UpdateAnnotations(FALSE, startLine)
+      end if
     end if
     
   elseif pNotify->nmhdr.code = NPPN_BEFORESHUTDOWN _
