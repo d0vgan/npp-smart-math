@@ -50,4 +50,4 @@ The existing AI-skills are: `add-mathparser-function` and `parser-reusability-cl
 ### 🙏 Special Thanks
 This project was originally started in FreePascal. However, seeking better binary size optimization and a cleaner code structure, I decided to port it to **FreeBASIC**.
 
-I would like to express my deepest gratitude to **Mysoft**, who was instrumental in this transition. He not only convinced me of FreeBASIC's benefits for plugin development but also generously shared his original code to serve as the template and backbone for **Smart-Math**.
+I would like to express my deepest gratitude to **Mysoft**, who was instrumental in this transition. He not only convinced me of FreeBASIC's benefits for plugin development but also generously shared his original code to serve as the template and backbone for **SmartMath**.

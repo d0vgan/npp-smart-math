@@ -3,7 +3,7 @@
 #include "Inc\PluginInterface.bi"
 #include "Inc\ConfigManager.bi"
 
-const INI_FILENAME = wstr("\Smart-Math.ini")
+const INI_FILENAME = wstr("\SmartMath.ini")
 const NPPM_GETPLUGINSCONFIGDIR = (WM_USER + 1000 + 46)
 
 dim shared as wstring * MAX_PATH iniFilePath
