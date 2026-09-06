@@ -1,65 +1,37 @@
 #include "windows.bi"
 #include "crt.bi"
 #include "Inc\PluginInterface.bi"
+#include "Inc\Scintilla.bi"
 #include "Inc\MathParser.bi"
 #include "Inc\ConfigManager.bi"
 #include "Inc\Smart-Math-Format.bi"
 #include "Inc\Smart-Math-CopyNormalize.bi"
 
 const PLUGIN_NAME = wstr("Smart Math Plugin")
+const DOCUMENTATION_FILE_NAME = wstr("SmartMath.md")
 const UDL_NAME = wstr("SmartMath")
 const TB_BMP_ID = 100
 const TB_ICON_LIGHT_ID = 101
 const TB_ICON_DARK_ID = 102
 const IDX_TOGGLE = 0
-const IDX_SEPARATOR = 1
+const IDX_SEPARATOR1 = 1
 const IDX_PREC0 = 2
 const IDX_COMPLEX = 11
 const IDX_SHOWERRORS = 12
-const NB_FUNC = 13
-const SCI_GETFIRSTVISIBLELINE = 2152
-const SCI_GETLINECOUNT = 2154
-const SCI_GETLINE = 2153
-const SCI_LINELENGTH = 2350
-const SCI_LINEFROMPOSITION = 2166
-const SCI_POSITIONFROMLINE = 2167
-const SCI_GETCURRENTPOS = 2008
-const SCI_SETEMPTYSELECTION = 2556
-const SCI_GETLINEENDPOSITION = 2136
-const SCI_POINTXFROMPOSITION = 2164
-const SCI_POINTYFROMPOSITION = 2165
-const SCI_TEXTHEIGHT = 2279
-const SCI_DOCLINEFROMVISIBLE = 2221
-const SCI_EOLANNOTATIONSETTEXT = 2740
-const SCI_EOLANNOTATIONGETTEXT = 2741
-const SCI_EOLANNOTATIONSETSTYLE = 2742
-const SCI_EOLANNOTATIONCLEARALL = 2744
-const SCI_EOLANNOTATIONSETVISIBLE = 2745
-const SCI_EOLANNOTATIONSETSTYLEOFFSET = 2747
-const SCI_EOLANNOTATIONGETSTYLEOFFSET = 2748
-const SCI_STYLESETFORE = 2051
-const SCI_STYLEGETFORE = 2481
-const SCI_ALLOCATEEXTENDEDSTYLES = 2553
-const SCI_GETMODEVENTMASK = 2378
-const SCI_SETMODEVENTMASK = 2359
+const IDX_SEPARATOR2 = 13
+const IDX_DOCUMENTATION = 14
+const NB_FUNC = 15
 const STYLE_BRACEBAD = 35
 const ANN_STYLE_DEFAULT = 0
 const ANN_STYLE_ERROR = 1
 const EOLANNOTATION_STANDARD = 1
 const EOLANNOTATION_HIDDEN = 0
-const SCN_DOUBLECLICK = 2006
-const SCN_MODIFIED = 2008
-const SC_MOD_INSERTTEXT = &h1
-const SC_MOD_DELETETEXT = &h2
-const SC_MOD_TEXT_FLAGS = (SC_MOD_INSERTTEXT or SC_MOD_DELETETEXT)
 #ifndef CF_UNICODETEXT
 const CF_UNICODETEXT = 13
 #endif
 #ifndef CP_UTF8
 const CP_UTF8 = 65001
 #endif
-const NPPM_GETFULLPATHFROMBUFFERID = (NPPMSG + 58)
-const NPPM_GETCURRENTBUFFERID = (NPPMSG + 60)
 
 dim shared as HINSTANCE hInst
 dim shared as NppData nppData
@@ -69,6 +41,7 @@ dim shared as WNDPROC oldSciProc = 0
 dim shared as boolean g_cacheReady = FALSE
 dim shared as string g_cachePath
 dim shared as integer g_smartMathUdlCmdId = 0
+dim shared as wstring * MAX_PATH documentationFilePath
 redim shared g_annText(0 to 0) as string
 redim shared g_cachedLineText(0 to 0) as string
 redim shared g_cachedResult(0 to 0) as string
@@ -100,6 +73,12 @@ function getSmartMathUdlId() as integer
   next i
   return 0
 end function
+
+private sub prepareDocumentationFilePath(hNppWnd as HWND)
+  dim as wstring * MAX_PATH nppDir
+  SendMessage(hNppWnd, NPPM_GETNPPDIRECTORY, MAX_PATH, cast(LPARAM, @nppDir))
+  documentationFilePath = nppDir & wstr("\plugins\doc\") & DOCUMENTATION_FILE_NAME
+end sub
 
 sub ApplySmartMathUDL()
   if g_smartMathUdlCmdId = 0 then exit sub
@@ -142,8 +121,27 @@ sub OrganizeMenu()
     AppendMenu(hSubMenuDecimal, MF_STRING, funcItems(IDX_PREC0 + i)._cmdID, wstr(str(i)))
   next i
   
-  AppendMenu(hMyMenu, MF_STRING or MF_POPUP, cast(UINT_PTR, hSubMenuDecimal), wstr("Decimal Places"))
-  ModifyMenu(hMyMenu, funcItems(IDX_SEPARATOR)._cmdID, MF_BYCOMMAND or MF_SEPARATOR, funcItems(IDX_SEPARATOR)._cmdID, NULL)
+  dim as integer nItems = GetMenuItemCount(hMyMenu)
+  dim as integer docPos = -1, insertPos = -1
+  dim as integer docId = funcItems(IDX_DOCUMENTATION)._cmdID
+  for i = 0 to nItems - 1
+    if GetMenuItemID(hMyMenu, i) = docId then
+      docPos = i
+      exit for
+    end if
+  next i
+  if docPos > 0 then
+    insertPos = docPos - 1
+  elseif nItems > 0 then
+    insertPos = nItems
+  end if
+  if insertPos >= 0 then
+    InsertMenu(hMyMenu, insertPos, MF_BYPOSITION or MF_STRING or MF_POPUP, cast(UINT_PTR, hSubMenuDecimal), wstr("Decimal Places"))
+  else
+    AppendMenu(hMyMenu, MF_STRING or MF_POPUP, cast(UINT_PTR, hSubMenuDecimal), wstr("Decimal Places"))
+  end if
+  ModifyMenu(hMyMenu, funcItems(IDX_SEPARATOR1)._cmdID, MF_BYCOMMAND or MF_SEPARATOR, funcItems(IDX_SEPARATOR1)._cmdID, NULL)
+  ModifyMenu(hMyMenu, funcItems(IDX_SEPARATOR2)._cmdID, MF_BYCOMMAND or MF_SEPARATOR, funcItems(IDX_SEPARATOR2)._cmdID, NULL)
   DrawMenuBar(nppData._nppHandle)
   SetPrecision(Config_GetDecimalPlaces())
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_COMPLEX)._cmdID, iif(Config_GetSupportComplexNumbers(), 1, 0))
@@ -551,6 +549,10 @@ sub ToggleShowErrors cdecl()
   if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
 end sub
 
+sub ShowDocumentation cdecl()
+  SendMessage(nppData._nppHandle, NPPM_DOOPEN, 0, cast(LPARAM, @documentationFilePath))
+end sub
+
 extern "C"
 
 sub setInfo(byval notpadPlusData as NppData) export
@@ -573,7 +575,7 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
     ._pShKey = NULL
   end with
 
-  with funcItems(IDX_SEPARATOR)
+  with funcItems(IDX_SEPARATOR1)
     ._itemName = ""
     ._pFunc = NULL
     ._cmdID = 0
@@ -613,6 +615,22 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
     ._init2Check = FALSE
     ._pShKey = NULL
   end with
+
+  with funcItems(IDX_SEPARATOR2)
+    ._itemName = ""
+    ._pFunc = NULL
+    ._cmdID = 0
+    ._init2Check = FALSE
+    ._pShKey = NULL
+  end with
+
+  with funcItems(IDX_DOCUMENTATION)
+    ._itemName = "Documentation..."
+    ._pFunc = @ShowDocumentation
+    ._cmdID = 0
+    ._init2Check = FALSE
+    ._pShKey = NULL
+  end with
   return @funcItems(0)
 end function
 
@@ -622,6 +640,7 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     Config_Load()
     OrganizeMenu()
     g_smartMathUdlCmdId = getSmartMathUdlId()
+    prepareDocumentationFilePath(nppData._nppHandle)
     EnsureSciHooked()
     SendMessage(nppData._nppHandle, NPPM_ADDSCNMODIFIEDFLAGS, 0, SC_MOD_TEXT_FLAGS)
     UpdateUIState()

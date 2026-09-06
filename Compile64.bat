@@ -13,7 +13,7 @@ if not exist "%FB_HOME%\bin\win64" (
 )
 
 set "PATH=%PATH%;%FB_HOME%;%FB_HOME%\bin\win64"
-set "OUT_DIR=%~dp0Win64"
+set "OUT_DIR=%~dp0Build-Win64"
 if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
 
 rem fbc flags (see also Compile32.bat):
