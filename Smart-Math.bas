@@ -7,6 +7,7 @@
 #include "Inc\Smart-Math-CopyNormalize.bi"
 
 const PLUGIN_NAME = wstr("Smart Math Plugin")
+const UDL_NAME = wstr("SmartMath")
 const TB_BMP_ID = 100
 const TB_ICON_LIGHT_ID = 101
 const TB_ICON_DARK_ID = 102
@@ -67,11 +68,14 @@ dim shared as boolean isNppClosing = FALSE
 dim shared as WNDPROC oldSciProc = 0
 dim shared as boolean g_cacheReady = FALSE
 dim shared as string g_cachePath
+dim shared as integer g_smartMathUdlCmdId = 0
 redim shared g_annText(0 to 0) as string
 redim shared g_cachedLineText(0 to 0) as string
 redim shared g_cachedResult(0 to 0) as string
 
 declare sub UpdateAnnotations(byval forceFull as boolean = FALSE, byval startLine as integer = -1)
+declare function getSmartMathUdlId() as integer
+declare sub ApplySmartMathUDL()
 declare sub SetPrecision(p as integer)
 declare function CopyResultForLine(byval hScintilla as HWND, byval lineIdx as integer) as boolean
 declare function SciSubclassProc(byval hWnd as HWND, byval uMsg as UINT, byval wParam as WPARAM, byval lParam as LPARAM) as LRESULT
@@ -79,6 +83,27 @@ declare function SciSubclassProc(byval hWnd as HWND, byval uMsg as UINT, byval w
 sub DllLoad() constructor
   const cFlags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS or GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
   GetModuleHandleEx(cFlags, cast(any ptr, @DllLoad), @hInst)
+end sub
+
+function getSmartMathUdlId() as integer
+  dim as integer baseId = 0, nUdl, i, cmdId
+  dim as wstring * 256 itemName
+  dim as HMENU hMenu = GetMenu(nppData._nppHandle)
+  if hMenu = 0 then return 0
+  nUdl = SendMessage(nppData._nppHandle, NPPM_GETNBUSERLANG, 0, cast(LPARAM, @baseId))
+  if nUdl <= 0 then return 0
+  for i = 1 to nUdl
+    cmdId = baseId + i
+    if GetMenuStringW(hMenu, cmdId, cast(LPWSTR, @itemName), 255, MF_BYCOMMAND) > 0 then
+      if itemName = UDL_NAME then return cmdId
+    end if
+  next i
+  return 0
+end function
+
+sub ApplySmartMathUDL()
+  if g_smartMathUdlCmdId = 0 then exit sub
+  SendMessage(nppData._nppHandle, NPPM_MENUCOMMAND, 0, g_smartMathUdlCmdId)
 end sub
 
 function FindMyPluginMenu() as HMENU
@@ -470,6 +495,7 @@ sub UpdateUIState()
   
   if isEnabled then
     UpdateAnnotations()
+    ApplySmartMathUDL()
   else
     dim as HWND hScintilla = GetCurrentScintilla()
     if hScintilla <> 0 then
@@ -595,6 +621,7 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     Config_Init(nppData._nppHandle)
     Config_Load()
     OrganizeMenu()
+    g_smartMathUdlCmdId = getSmartMathUdlId()
     EnsureSciHooked()
     SendMessage(nppData._nppHandle, NPPM_ADDSCNMODIFIEDFLAGS, 0, SC_MOD_TEXT_FLAGS)
     UpdateUIState()
