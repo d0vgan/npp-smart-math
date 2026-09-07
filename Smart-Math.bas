@@ -6,6 +6,7 @@
 #include "Inc\ConfigManager.bi"
 #include "Inc\Smart-Math-Format.bi"
 #include "Inc\Smart-Math-CopyNormalize.bi"
+#include "Inc\Smart-Math-About.bi"
 
 const PLUGIN_NAME = wstr("Smart Math")
 const DOCUMENTATION_FILE_NAME = wstr("SmartMath.md")
@@ -20,7 +21,8 @@ const IDX_COMPLEX = 11
 const IDX_SHOWERRORS = 12
 const IDX_SEPARATOR2 = 13
 const IDX_DOCUMENTATION = 14
-const NB_FUNC = 15
+const IDX_ABOUT = 15
+const NB_FUNC = 16
 const STYLE_BRACEBAD = 35
 const ANN_STYLE_DEFAULT = 0
 const ANN_STYLE_ERROR = 1
@@ -560,6 +562,10 @@ sub ShowDocumentation cdecl()
   SendMessage(nppData._nppHandle, NPPM_DOOPEN, 0, cast(LPARAM, @documentationFilePath))
 end sub
 
+sub ShowAbout cdecl()
+  ShowAboutDialog(nppData._nppHandle)
+end sub
+
 extern "C"
 
 sub setInfo(byval notpadPlusData as NppData) export
@@ -638,6 +644,15 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
     ._init2Check = FALSE
     ._pShKey = NULL
   end with
+
+  with funcItems(IDX_ABOUT)
+    ._itemName = "About"
+    ._pFunc = @ShowAbout
+    ._cmdID = 0
+    ._init2Check = FALSE
+    ._pShKey = NULL
+  end with
+
   return @funcItems(0)
 end function
 
