@@ -37,7 +37,11 @@ To compile the plugin yourself:
 1.  Create a folder named `SmartMath` inside the `plugins` directory of your Notepad++ installation.
     *   Typical path: `C:\Program Files\Notepad++\plugins\SmartMath\`
 2.  Copy the compiled DLL (`SmartMath.dll`) into that folder.
-3.  Restart Notepad++.
+3.  Copy the following files:
+    * documentation - "Notepad++\plugins\doc";
+    * user-defined language - "Notepad++\userDefineLangs";
+    * auto-completion - "Notepad++\autoCompletion".
+4.  Restart Notepad++.
 
 ### Development
 1. The mathematical "heart" of SmartMath, its math parser and evaluator, is "MathParser.bas", "MathParserFactorInt.bas" and "MathParserRawResult.bas".  
