@@ -11,6 +11,7 @@
 const PLUGIN_NAME = wstr("Smart Math")
 const DOCUMENTATION_FILE_NAME = wstr("SmartMath.md")
 const UDL_NAME = wstr("SmartMath")
+const UDL_NAME_DARK = wstr("SmartMath (dark mode)")
 const TB_BMP_ID = 100
 const TB_ICON_LIGHT_ID = 101
 const TB_ICON_DARK_ID = 102
@@ -62,17 +63,26 @@ end sub
 
 function getSmartMathUdlId() as integer
   dim as integer baseId = 0, nUdl, i, cmdId
+  dim as boolean isDarkMode
   dim as wstring * 256 itemName
   dim as HMENU hMenu = GetMenu(nppData._nppHandle)
   if hMenu = 0 then return 0
+
+  isDarkMode = SendMessage(nppData._nppHandle, NPPM_ISDARKMODEENABLED, 0, 0) <> 0
   nUdl = SendMessage(nppData._nppHandle, NPPM_GETNBUSERLANG, 0, cast(LPARAM, @baseId))
   if nUdl <= 0 then return 0
+
   for i = 1 to nUdl
     cmdId = baseId + i
     if GetMenuStringW(hMenu, cmdId, cast(LPWSTR, @itemName), 255, MF_BYCOMMAND) > 0 then
-      if itemName = UDL_NAME then return cmdId
+      if isDarkMode then
+        if itemName = UDL_NAME_DARK then return cmdId
+      else
+        if itemName = UDL_NAME then return cmdId
+      end if
     end if
   next i
+
   return 0
 end function
 
@@ -92,7 +102,7 @@ function FindMyPluginMenu() as HMENU
   dim as integer i, j, k
   dim as HMENU hSub, hDeep
   dim as integer targetID = funcItems(0)._cmdID
-  
+
   for i = 0 to GetMenuItemCount(hMain) - 1
     hSub = GetSubMenu(hMain, i)
     if hSub <> 0 then
@@ -114,15 +124,15 @@ end function
 sub OrganizeMenu()
   dim as HMENU hMyMenu = FindMyPluginMenu()
   if hMyMenu = 0 then exit sub
-  
+
   dim as HMENU hSubMenuDecimal = CreatePopupMenu()
   dim as integer i
-  
+
   for i = 0 to 8
     RemoveMenu(hMyMenu, funcItems(IDX_PREC0 + i)._cmdID, MF_BYCOMMAND)
     AppendMenu(hSubMenuDecimal, MF_STRING, funcItems(IDX_PREC0 + i)._cmdID, wstr(str(i)))
   next i
-  
+
   dim as integer nItems = GetMenuItemCount(hMyMenu)
   dim as integer docPos = -1, insertPos = -1
   dim as integer docId = funcItems(IDX_DOCUMENTATION)._cmdID
@@ -418,7 +428,7 @@ sub UpdateAnnotations(byval forceFull as boolean = FALSE, byval startLine as int
   dim as boolean cacheOk
   dim as RawResult raw
   dim as string sLine
-  
+
   if hScintilla = 0 then exit sub
   EnsureErrorAnnotationStyle(hScintilla)
 
@@ -490,9 +500,9 @@ end sub
 sub UpdateUIState()
   dim as string curPath = GetCurrentPath()
   dim as boolean isEnabled = Config_IsFileEnabled(curPath)
-  
+
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(0)._cmdID, iif(isEnabled, 1, 0))
-  
+
   if isEnabled then
     UpdateAnnotations()
     ApplySmartMathUDL()
@@ -521,7 +531,7 @@ sub SetPrecision(p as integer, byval saveConfig as boolean)
     SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_PREC0 + i)._cmdID, 0)
   next i
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_PREC0 + p)._cmdID, 1)
-  
+
   if saveConfig then Config_Save()
   if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
 end sub
@@ -579,7 +589,7 @@ end function
 function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
   *nbF = NB_FUNC
   dim as wstring * 64 sMainName = "Smart Math"
-  
+
   with funcItems(IDX_TOGGLE)
     ._itemName = sMainName
     ._pFunc = @TogglePlugin
@@ -595,11 +605,11 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
     ._init2Check = FALSE
     ._pShKey = NULL
   end with
-  
+
   static as PFUNCPLUGINCMD pFuncs(8) => { _
     @SetPrec0, @SetPrec1, @SetPrec2, @SetPrec3, @SetPrec4, _
     @SetPrec5, @SetPrec6, @SetPrec7, @SetPrec8 }
-  
+
   dim as integer i
   dim as wstring * 64 sTempName
   for i = 0 to 8
@@ -666,12 +676,12 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     EnsureSciHooked()
     SendMessage(nppData._nppHandle, NPPM_ADDSCNMODIFIEDFLAGS, 0, SC_MOD_TEXT_FLAGS)
     UpdateUIState()
-    
+
   elseif pNotify->nmhdr.code = NPPN_TBMODIFICATION then
     dim as HDC hdc = GetDC(NULL)
     dim as integer bmpX = 16, bmpY = 16
     dim as integer icoX = 32, icoY = 32
-    
+
     if hdc then
       bmpX = MulDiv(16, GetDeviceCaps(hdc, LOGPIXELSX), 96)
       bmpY = MulDiv(16, GetDeviceCaps(hdc, LOGPIXELSY), 96)
@@ -679,30 +689,30 @@ sub beNotified(byval pNotify as SCNotification ptr) export
       icoY = MulDiv(32, GetDeviceCaps(hdc, LOGPIXELSY), 96)
       ReleaseDC(NULL, hdc)
     end if
-    
+
     dim as HBITMAP hBmp = LoadImage(hInst, MAKEINTRESOURCE(TB_BMP_ID), IMAGE_BITMAP, bmpX, bmpY, LR_LOADTRANSPARENT or LR_LOADMAP3DCOLORS)
     dim as HICON hIconLight = LoadImage(hInst, MAKEINTRESOURCE(TB_ICON_LIGHT_ID), IMAGE_ICON, icoX, icoY, LR_DEFAULTSIZE)
     dim as HICON hIconDark = LoadImage(hInst, MAKEINTRESOURCE(TB_ICON_DARK_ID), IMAGE_ICON, icoX, icoY, LR_DEFAULTSIZE)
-    
+
     if hIconDark = 0 then hIconDark = hIconLight
-    
+
     dim as toolbarIconsWithDarkMode tbIcons
     tbIcons.hToolbarBmp = hBmp
     tbIcons.hToolbarIcon = hIconLight
     tbIcons.hToolbarIconDarkMode = hIconDark
-    
+
     SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, funcItems(0)._cmdID, cast(LPARAM, @tbIcons))
-    
+
   elseif pNotify->nmhdr.code = NPPN_BUFFERACTIVATED then
     UpdateUIState()
-    
+
   elseif pNotify->nmhdr.code = NPPN_WORDSTYLESUPDATED _
       orelse pNotify->nmhdr.code = NPPN_LANGCHANGED then
     if Config_IsFileEnabled(GetCurrentPath()) then
       dim as HWND hSciTheme = GetCurrentScintilla()
       if hSciTheme <> 0 then EnsureErrorAnnotationStyle(hSciTheme)
     end if
-    
+
   elseif pNotify->nmhdr.code = SCN_MODIFIED then
     if (pNotify->modificationType and SC_MOD_TEXT_FLAGS) <> 0 then
       if Config_IsFileEnabled(GetCurrentPath()) then
@@ -714,12 +724,12 @@ sub beNotified(byval pNotify as SCNotification ptr) export
         UpdateAnnotations(FALSE, startLine)
       end if
     end if
-    
+
   elseif pNotify->nmhdr.code = NPPN_BEFORESHUTDOWN _
       orelse pNotify->nmhdr.code = NPPN_SHUTDOWN then
     isNppClosing = TRUE
     UnhookSci()
-    
+
   elseif pNotify->nmhdr.code = NPPN_FILEBEFORECLOSE then
     if isNppClosing = FALSE then
       dim as integer bufferID = pNotify->nmhdr.idFrom
@@ -727,6 +737,14 @@ sub beNotified(byval pNotify as SCNotification ptr) export
       SendMessage(nppData._nppHandle, NPPM_GETFULLPATHFROMBUFFERID, bufferID, cast(LPARAM, @fullPath))
       Config_DisableFile(str(fullPath))
     end if
+
+  elseif pNotify->nmhdr.code = NPPN_DARKMODECHANGED then
+    dim as integer prevUdlId = g_smartMathUdlCmdId
+    g_smartMathUdlCmdId = getSmartMathUdlId()
+    if (prevUdlId <> g_smartMathUdlCmdId) andalso Config_IsFileEnabled(GetCurrentPath()) then
+      ApplySmartMathUDL()
+    end if
+
   end if
 end sub
 
