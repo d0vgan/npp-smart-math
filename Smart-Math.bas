@@ -134,16 +134,16 @@ sub OrganizeMenu()
   next i
 
   dim as integer nItems = GetMenuItemCount(hMyMenu)
-  dim as integer docPos = -1, insertPos = -1
-  dim as integer docId = funcItems(IDX_DOCUMENTATION)._cmdID
+  dim as integer cmdPos = -1, insertPos = -1
+  dim as integer cmdId = funcItems(IDX_COMPLEX)._cmdID
   for i = 0 to nItems - 1
-    if GetMenuItemID(hMyMenu, i) = docId then
-      docPos = i
+    if GetMenuItemID(hMyMenu, i) = cmdId then
+      cmdPos = i
       exit for
     end if
   next i
-  if docPos > 0 then
-    insertPos = docPos - 1
+  if cmdPos > 0 then
+    insertPos = cmdPos
   elseif nItems > 0 then
     insertPos = nItems
   end if
