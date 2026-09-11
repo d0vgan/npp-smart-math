@@ -376,6 +376,7 @@ function AnnotationStyleForText(byref sText as string) as integer
 end function
 
 function CopyResultForLine(byval hScintilla as HWND, byval lineIdx as integer) as boolean
+  if not g_cacheReady then return FALSE
   dim as string sRes, sCopy
   if (lineIdx >= 0) andalso (lineIdx <= ubound(g_annText)) then
     sRes = g_annText(lineIdx)
@@ -391,10 +392,8 @@ sub SetLineAnnotation(byval hScintilla as HWND, byval lineIdx as integer, byval 
   dim as string sResText = space(padding) & sText
   dim as integer annStyle = AnnotationStyleForText(sText)
   if (lineIdx >= 0) andalso (lineIdx <= ubound(g_annText)) then
-    if g_annText(lineIdx) <> sResText then
-      g_annText(lineIdx) = sResText
-      SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, cast(LPARAM, strptr(sResText)))
-    end if
+    g_annText(lineIdx) = sResText
+    SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, cast(LPARAM, strptr(sResText)))
   else
     SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, cast(LPARAM, strptr(sResText)))
   end if
@@ -407,7 +406,6 @@ end sub
 
 sub ClearLineAnnotation(byval hScintilla as HWND, byval lineIdx as integer)
   if (lineIdx >= 0) andalso (lineIdx <= ubound(g_annText)) then
-    if Len(g_annText(lineIdx)) = 0 then exit sub
     g_annText(lineIdx) = ""
   end if
   SendMessage(hScintilla, SCI_EOLANNOTATIONSETTEXT, lineIdx, 0)
@@ -483,6 +481,7 @@ sub UpdateAnnotations(byval forceFull as boolean = FALSE, byval startLine as int
     g_cachedResult(i) = DisplayTextFromEval(sLine)
   next i
 
+  ' separate loop for quick annotations update
   for i = firstChanged to nLines - 1
     if Len(g_cachedResult(i)) > 0 then
       padding = maxContentLen - Len(g_cachedLineText(i)) + 5
@@ -503,6 +502,8 @@ sub UpdateUIState()
 
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(0)._cmdID, iif(isEnabled, 1, 0))
 
+  InvalidateAnnotationCache()
+
   if isEnabled then
     UpdateAnnotations()
     ApplySmartMathUDL()
@@ -512,7 +513,6 @@ sub UpdateUIState()
       SendMessage(hScintilla, SCI_EOLANNOTATIONCLEARALL, 0, 0)
       SendMessage(hScintilla, SCI_EOLANNOTATIONSETVISIBLE, EOLANNOTATION_HIDDEN, 0)
     end if
-    InvalidateAnnotationCache()
   end if
 end sub
 
@@ -520,7 +520,7 @@ sub TogglePlugin cdecl()
   dim as string curPath = GetCurrentPath()
   ' MessageBoxA(nppData._nppHandle, curPath, "Smart Math Toggle", MB_OK or MB_ICONWARNING)
   Config_ToggleFile(curPath)
-  Config_Save()
+  Config_Save()  
   UpdateUIState()
 end sub
 
