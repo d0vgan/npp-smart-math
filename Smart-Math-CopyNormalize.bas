@@ -1,4 +1,5 @@
 #include once "Inc\Smart-Math-Format.bi"
+#include once "Inc\ConfigManager.bi"
 
 private function IndexOfExponentLetterCopy(byref s as String) as Integer
   dim n as Integer = Len(s)
@@ -13,8 +14,8 @@ private function IndexOfExponentLetterCopy(byref s as String) as Integer
 end function
 
 private function StripThousandsFromCopyToken(byref t as String) as String
-  if g_bUseThousandsSeparator = FALSE then return t
-  dim d as String = g_sThousandsSeparator
+  if not Config_GetUseThousandsSep() then return t
+  dim d as String = Config_GetThousandsSep()
   dim dlen as Integer = Len(d)
   if dlen = 0 then return t
   dim r as String = t
@@ -26,13 +27,13 @@ private function StripThousandsFromCopyToken(byref t as String) as String
   return r
 end function
 
-'' Display uses g_sArrayOutputSeparator & " " between elements; split on that so decimal commas stay intact.
+'' Display uses ArrayOutputSep & " " between elements; split on that so decimal commas stay intact.
 private function SplitCopyArrayInner(byref inner as String, elems() as String) as Integer
   erase elems
   dim s as String = inner
   dim n as Integer = Len(s)
   if n = 0 then return 0
-  dim delim as String = Trim(g_sArrayOutputSeparator) & " "
+  dim delim as String = Trim(Config_GetArrayOutputSep()) & " "
   dim dlen as Integer = Len(delim)
   if dlen < 1 then return 0
   dim depth as Integer = 0
@@ -72,8 +73,8 @@ private function SplitCopyArrayInner(byref inner as String, elems() as String) a
   return partCount + 1
 end function
 
-'' Clipboard: ASCII "." decimals (parser-friendly). Strip g_sThousandsSeparator only when
-'' g_bUseThousandsSeparator is true; honor g_sDecimalSeparator; if decimal is "." but a comma
+'' Clipboard: ASCII "." decimals (parser-friendly). Strip ThousandsSep only when
+'' UseThousandsSep is true; honor DecimalSep; if decimal is "." but a comma
 '' remains in the mantissa (locale/display mismatch), normalize those commas too.
 private function ElemToCanonicalCopy(byref seg as String) as String
   dim t as String = Trim(seg)
@@ -94,7 +95,7 @@ private function ElemToCanonicalCopy(byref seg as String) as String
     eTail = ""
   end if
 
-  dim ds as String = g_sDecimalSeparator
+  dim ds as String = Config_GetDecimalSep()
   dim dslen as Integer = Len(ds)
   if dslen > 0 andalso ds <> "." then
     dim p as Integer = InStr(1, mant, ds)
@@ -104,7 +105,7 @@ private function ElemToCanonicalCopy(byref seg as String) as String
     wend
   end if
 
-  if g_sDecimalSeparator = "." then
+  if Config_GetDecimalSep() = "." then
     dim p2 as Integer = InStr(1, mant, ",")
     while p2 > 0
       mant = Left(mant, p2 - 1) & "." & Mid(mant, p2 + 1)
@@ -116,7 +117,6 @@ private function ElemToCanonicalCopy(byref seg as String) as String
 end function
 
 function NormalizeCopiedResult(byref sRes as String) as String
-  SyncFormatSettings()
   dim sWork as String = LTrim(sRes)
   if Len(sWork) = 0 then return ""
 
