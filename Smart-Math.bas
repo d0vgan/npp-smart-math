@@ -18,12 +18,13 @@ const TB_ICON_DARK_ID = 102
 const IDX_TOGGLE = 0
 const IDX_SEPARATOR1 = 1
 const IDX_PREC0 = 2
-const IDX_COMPLEX = 11
-const IDX_SHOWERRORS = 12
-const IDX_SEPARATOR2 = 13
-const IDX_DOCUMENTATION = 14
-const IDX_ABOUT = 15
-const NB_FUNC = 16
+const IDX_USETHOUSANDS = 11
+const IDX_COMPLEX = 12
+const IDX_SHOWERRORS = 13
+const IDX_SEPARATOR2 = 14
+const IDX_DOCUMENTATION = 15
+const IDX_ABOUT = 16
+const NB_FUNC = 17
 const STYLE_BRACEBAD = 35
 const ANN_STYLE_DEFAULT = 0
 const ANN_STYLE_ERROR = 1
@@ -135,7 +136,7 @@ sub OrganizeMenu()
 
   dim as integer nItems = GetMenuItemCount(hMyMenu)
   dim as integer cmdPos = -1, insertPos = -1
-  dim as integer cmdId = funcItems(IDX_COMPLEX)._cmdID
+  dim as integer cmdId = funcItems(IDX_USETHOUSANDS)._cmdID
   for i = 0 to nItems - 1
     if GetMenuItemID(hMyMenu, i) = cmdId then
       cmdPos = i
@@ -156,6 +157,7 @@ sub OrganizeMenu()
   ModifyMenu(hMyMenu, funcItems(IDX_SEPARATOR2)._cmdID, MF_BYCOMMAND or MF_SEPARATOR, funcItems(IDX_SEPARATOR2)._cmdID, NULL)
   DrawMenuBar(nppData._nppHandle)
   SetPrecision(Config_GetDecimalPlaces(), FALSE)
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_USETHOUSANDS)._cmdID, iif(Config_GetUseThousandsSep(), 1, 0))
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_COMPLEX)._cmdID, iif(Config_GetSupportComplexNumbers(), 1, 0))
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_SHOWERRORS)._cmdID, iif(Config_GetShowErrors(), 1, 0))
 end sub
@@ -520,7 +522,7 @@ sub TogglePlugin cdecl()
   dim as string curPath = GetCurrentPath()
   ' MessageBoxA(nppData._nppHandle, curPath, "Smart Math Toggle", MB_OK or MB_ICONWARNING)
   Config_ToggleFile(curPath)
-  Config_Save()  
+  Config_Save()
   UpdateUIState()
 end sub
 
@@ -545,6 +547,14 @@ sub SetPrec5 cdecl() : SetPrecision(5, TRUE) : end sub
 sub SetPrec6 cdecl() : SetPrecision(6, TRUE) : end sub
 sub SetPrec7 cdecl() : SetPrecision(7, TRUE) : end sub
 sub SetPrec8 cdecl() : SetPrecision(8, TRUE) : end sub
+
+sub ToggleUseThousandsSep cdecl()
+  dim as boolean enabled = not Config_GetUseThousandsSep()
+  Config_SetUseThousandsSep(enabled)
+  Config_Save()
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_USETHOUSANDS)._cmdID, iif(enabled, 1, 0))
+  if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
+end sub
 
 sub ToggleComplexNumbers cdecl()
   dim as boolean enabled = not Config_GetSupportComplexNumbers()
@@ -622,6 +632,14 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
       ._pShKey = NULL
     end with
   next i
+
+  with funcItems(IDX_USETHOUSANDS)
+    ._itemName = "Use Thousands Separator"
+    ._pFunc = @ToggleUseThousandsSep
+    ._cmdID = 0
+    ._init2Check = FALSE
+    ._pShKey = NULL
+  end with
 
   with funcItems(IDX_COMPLEX)
     ._itemName = "Complex Numbers"
