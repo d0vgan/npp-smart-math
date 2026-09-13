@@ -890,3 +890,24 @@ A tight `i` suffix on a numeric literal (decimal/scientific or `0x`/`0b`/`0o`, n
 
 - **Lambda function support (on by default):** `Parser_SetSupportLambdaFunctions` / `Parser_GetSupportLambdaFunctions`. Default is on: lambda-style user function definitions (`f=x,x+1`, `f=(x,y):(x+y)`, etc.) and anonymous lambda keys in `sortby` (`sortby((3,1,2), x:-x)`) are active. When set off, the parser skips lambda parse and evaluation paths; any input that uses lambda definition syntax fails with `unexpected token`, while ordinary `sortby` with a named function reference (for example `sortby((-3,-1,2), abs)`) still works.
 
+## SmartMath Settings
+
+SmartMath Settings are stored in "SmartMath.ini" under the "plugins\Config" folder.
+
+Manual formatting options:
+
+```ini
+[Settings]
+DecimalSeparatorChar=,
+ThousandsSeparatorChar=.
+ArrayOutputSeparatorChar=;
+```
+
+Rules:
+
+- Each of these keys uses one character (extra characters are ignored).
+- Missing/empty key falls back to defaults.
+- To use a space as a separator character, specify it in quotes:
+  - ThousandsSeparatorChar=" "
+- Input expression argument separator stays comma (`,`).
+- If array output separator is changed, double-click copy normalizes array output back to comma for valid parser input.
