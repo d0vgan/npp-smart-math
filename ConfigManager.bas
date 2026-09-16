@@ -5,6 +5,7 @@
 
 const INI_FILENAME = wstr("\SmartMath.ini")
 const INI_SECTION_SETTINGS = wstr("Settings")
+const INI_SECTION_OUTPUT = wstr("Output")
 const DECIMAL_SEP_DEFAULT = "."
 const THOUSANDS_SEP_DEFAULT = "'"
 const ARRAY_OUTPUT_SEP_DEFAULT = ","
@@ -176,15 +177,15 @@ sub Config_Load()
 
   ' Read-only settings...
   buffer[0] = 0
-  GetPrivateProfileString(INI_SECTION_SETTINGS, wstr("DecimalSeparatorChar"), wstr(DECIMAL_SEP_DEFAULT), @buffer, BUFFER_SIZE, iniFilePath)
+  GetPrivateProfileString(INI_SECTION_OUTPUT, wstr("DecimalSeparatorChar"), wstr(DECIMAL_SEP_DEFAULT), @buffer, BUFFER_SIZE, iniFilePath)
   if buffer[0] <> 0 then storedDecimalSep = Left(buffer, 1)
 
   buffer[0] = 0
-  GetPrivateProfileString(INI_SECTION_SETTINGS, wstr("ThousandsSeparatorChar"), wstr(THOUSANDS_SEP_DEFAULT), @buffer, BUFFER_SIZE, iniFilePath)
+  GetPrivateProfileString(INI_SECTION_OUTPUT, wstr("ThousandsSeparatorChar"), wstr(THOUSANDS_SEP_DEFAULT), @buffer, BUFFER_SIZE, iniFilePath)
   if buffer[0] <> 0 then storedThousandsSep = Left(buffer, 1)
 
   buffer[0] = 0
-  GetPrivateProfileString(INI_SECTION_SETTINGS, wstr("ArrayOutputSeparatorChar"), wstr(ARRAY_OUTPUT_SEP_DEFAULT), @buffer, BUFFER_SIZE, iniFilePath)
+  GetPrivateProfileString(INI_SECTION_OUTPUT, wstr("ArrayOutputSeparatorChar"), wstr(ARRAY_OUTPUT_SEP_DEFAULT), @buffer, BUFFER_SIZE, iniFilePath)
   if buffer[0] <> 0 then storedArrayOutputSep = Left(buffer, 1)
 
   ' Read-write settings...

@@ -894,10 +894,10 @@ A tight `i` suffix on a numeric literal (decimal/scientific or `0x`/`0b`/`0o`, n
 
 SmartMath Settings are stored in "SmartMath.ini" under the "plugins\Config" folder.
 
-Manual formatting options for the output:
+Manual formatting options:
 
 ```ini
-[Settings]
+[Output]
 DecimalSeparatorChar=.
 ThousandsSeparatorChar='
 ArrayOutputSeparatorChar=,
