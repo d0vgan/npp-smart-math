@@ -12,6 +12,7 @@ const ARRAY_OUTPUT_SEP_DEFAULT = ","
 const DECIMAL_PLACES_DEFAULT = 2
 const COMPLEX_NUMBERS_DEFAULT = 0
 const SHOW_ERRORS_DEFAULT = 0
+const SYNTAX_HIGHLIGHT_DEFAULT = 1
 const USE_THOUSANDS_SEP_DEFAULT = 0
 const NPPM_GETPLUGINSCONFIGDIR = (WM_USER + 1000 + 46)
 
@@ -20,6 +21,7 @@ dim shared as integer storedDecimalPlaces = DECIMAL_PLACES_DEFAULT
 dim shared as boolean storedUseThousandsSep = USE_THOUSANDS_SEP_DEFAULT <> 0
 dim shared as boolean storedSupportComplexNumbers = COMPLEX_NUMBERS_DEFAULT <> 0
 dim shared as boolean storedShowErrors = SHOW_ERRORS_DEFAULT <> 0
+dim shared as boolean storedSyntaxHighlight = SYNTAX_HIGHLIGHT_DEFAULT <> 0
 dim shared as string storedDecimalSep
 dim shared as string storedThousandsSep
 dim shared as string storedArrayOutputSep
@@ -70,6 +72,14 @@ end sub
 
 function Config_GetShowErrors() as boolean
   return storedShowErrors
+end function
+
+sub Config_SetSyntaxHighlight(byval enabled as boolean)
+  storedSyntaxHighlight = enabled
+end sub
+
+function Config_GetSyntaxHighlight() as boolean
+  return storedSyntaxHighlight
 end function
 
 function Config_GetDecimalSep() as string
@@ -155,6 +165,7 @@ sub Config_Save()
   WritePrivateProfileString(INI_SECTION_SETTINGS, wstr("UseThousandsSeparator"), wstr(iif(storedUseThousandsSep, "1", "0")), iniFilePath)
   WritePrivateProfileString(INI_SECTION_SETTINGS, wstr("ComplexNumbers"), wstr(iif(storedSupportComplexNumbers, "1", "0")), iniFilePath)
   WritePrivateProfileString(INI_SECTION_SETTINGS, wstr("ShowErrors"), wstr(iif(storedShowErrors, "1", "0")), iniFilePath)
+  WritePrivateProfileString(INI_SECTION_SETTINGS, wstr("SyntaxHighlight"), wstr(iif(storedSyntaxHighlight, "1", "0")), iniFilePath)
 
   for i = lbound(enabledFiles) to ubound(enabledFiles)
     if len(enabledFiles(i)) > 0 then
@@ -195,6 +206,7 @@ sub Config_Load()
   storedUseThousandsSep = (GetPrivateProfileInt(INI_SECTION_SETTINGS, wstr("UseThousandsSeparator"), USE_THOUSANDS_SEP_DEFAULT, iniFilePath) <> 0)
   storedSupportComplexNumbers = (GetPrivateProfileInt(INI_SECTION_SETTINGS, wstr("ComplexNumbers"), COMPLEX_NUMBERS_DEFAULT, iniFilePath) <> 0)
   storedShowErrors = (GetPrivateProfileInt(INI_SECTION_SETTINGS, wstr("ShowErrors"), SHOW_ERRORS_DEFAULT, iniFilePath) <> 0)
+  storedSyntaxHighlight = (GetPrivateProfileInt(INI_SECTION_SETTINGS, wstr("SyntaxHighlight"), SYNTAX_HIGHLIGHT_DEFAULT, iniFilePath) <> 0)
 
   buffer[0] = 0
   GetPrivateProfileString(INI_SECTION_SETTINGS, wstr("ActiveTabs"), wstr(""), @buffer, BUFFER_SIZE, iniFilePath)

@@ -19,6 +19,8 @@ declare sub Config_SetSupportComplexNumbers(byval enabled as boolean)
 declare function Config_GetSupportComplexNumbers() as boolean
 declare sub Config_SetShowErrors(byval enabled as boolean)
 declare function Config_GetShowErrors() as boolean
+declare sub Config_SetSyntaxHighlight(byval enabled as boolean)
+declare function Config_GetSyntaxHighlight() as boolean
 ' Getters
 declare function Config_GetDecimalSep() as string
 declare function Config_GetThousandsSep() as string

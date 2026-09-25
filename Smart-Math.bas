@@ -15,16 +15,17 @@ const UDL_NAME_DARK = wstr("SmartMath (dark mode)")
 const TB_BMP_ID = 100
 const TB_ICON_LIGHT_ID = 101
 const TB_ICON_DARK_ID = 102
-const IDX_TOGGLE = 0
+const IDX_TOGGLEPLUGIN = 0
 const IDX_SEPARATOR1 = 1
 const IDX_PREC0 = 2
 const IDX_USETHOUSANDS = 11
 const IDX_COMPLEX = 12
 const IDX_SHOWERRORS = 13
-const IDX_SEPARATOR2 = 14
-const IDX_DOCUMENTATION = 15
-const IDX_ABOUT = 16
-const NB_FUNC = 17
+const IDX_SYNTAXHIGHLIGHT = 14
+const IDX_SEPARATOR2 = 15
+const IDX_DOCUMENTATION = 16
+const IDX_ABOUT = 17
+const NB_FUNC = 18
 const STYLE_BRACEBAD = 35
 const ANN_STYLE_DEFAULT = 0
 const ANN_STYLE_ERROR = 1
@@ -160,11 +161,12 @@ sub OrganizeMenu()
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_USETHOUSANDS)._cmdID, iif(Config_GetUseThousandsSep(), 1, 0))
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_COMPLEX)._cmdID, iif(Config_GetSupportComplexNumbers(), 1, 0))
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_SHOWERRORS)._cmdID, iif(Config_GetShowErrors(), 1, 0))
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_SYNTAXHIGHLIGHT)._cmdID, iif(Config_GetSyntaxHighlight(), 1, 0))
 end sub
 
 function GetCurrentPath() as string
   dim as integer bufferID
-  dim as wstring * MAX_PATH fullPath
+  dim as wstring * (MAX_PATH*2) fullPath
   bufferID = SendMessage(nppData._nppHandle, NPPM_GETCURRENTBUFFERID, 0, 0)
   SendMessage(nppData._nppHandle, NPPM_GETFULLPATHFROMBUFFERID, bufferID, cast(LPARAM, @fullPath))
   return str(fullPath)
@@ -508,7 +510,7 @@ sub UpdateUIState()
 
   if isEnabled then
     UpdateAnnotations()
-    ApplySmartMathUDL()
+    if Config_GetSyntaxHighlight() then ApplySmartMathUDL()
   else
     dim as HWND hScintilla = GetCurrentScintilla()
     if hScintilla <> 0 then
@@ -572,6 +574,14 @@ sub ToggleShowErrors cdecl()
   if Config_IsFileEnabled(GetCurrentPath()) then UpdateAnnotations(TRUE)
 end sub
 
+sub ToggleSyntaxHighlight cdecl()
+  dim as boolean enabled = not Config_GetSyntaxHighlight()
+  Config_SetSyntaxHighlight(enabled)
+  Config_Save()
+  SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_SYNTAXHIGHLIGHT)._cmdID, iif(enabled, 1, 0))
+  if enabled andalso Config_IsFileEnabled(GetCurrentPath()) then ApplySmartMathUDL()
+end sub
+
 sub ShowDocumentation cdecl()
   dim as wstring * (MAX_PATH + 64) sMsg
   if GetFileAttributesW(@documentationFilePath) = INVALID_FILE_ATTRIBUTES then
@@ -600,7 +610,7 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
   *nbF = NB_FUNC
   dim as wstring * 64 sMainName = "Smart Math"
 
-  with funcItems(IDX_TOGGLE)
+  with funcItems(IDX_TOGGLEPLUGIN)
     ._itemName = sMainName
     ._pFunc = @TogglePlugin
     ._cmdID = 0
@@ -652,6 +662,14 @@ function getFuncsArray(byval nbF as integer ptr) as FuncItem ptr export
   with funcItems(IDX_SHOWERRORS)
     ._itemName = "Show Errors"
     ._pFunc = @ToggleShowErrors
+    ._cmdID = 0
+    ._init2Check = FALSE
+    ._pShKey = NULL
+  end with
+
+  with funcItems(IDX_SYNTAXHIGHLIGHT)
+    ._itemName = "Syntax Highlighting"
+    ._pFunc = @ToggleSyntaxHighlight
     ._cmdID = 0
     ._init2Check = FALSE
     ._pShKey = NULL
@@ -751,7 +769,7 @@ sub beNotified(byval pNotify as SCNotification ptr) export
   elseif pNotify->nmhdr.code = NPPN_FILEBEFORECLOSE then
     if isNppClosing = FALSE then
       dim as integer bufferID = pNotify->nmhdr.idFrom
-      dim as wstring * MAX_PATH fullPath
+      dim as wstring * (MAX_PATH*2) fullPath
       SendMessage(nppData._nppHandle, NPPM_GETFULLPATHFROMBUFFERID, bufferID, cast(LPARAM, @fullPath))
       Config_DisableFile(str(fullPath))
     end if
@@ -760,7 +778,7 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     dim as integer prevUdlId = g_smartMathUdlCmdId
     g_smartMathUdlCmdId = getSmartMathUdlId()
     if (prevUdlId <> g_smartMathUdlCmdId) andalso Config_IsFileEnabled(GetCurrentPath()) then
-      ApplySmartMathUDL()
+      if Config_GetSyntaxHighlight() then ApplySmartMathUDL()
     end if
 
   end if
