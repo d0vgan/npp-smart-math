@@ -46,7 +46,9 @@ dim shared as WNDPROC oldSciProc = 0
 dim shared as boolean g_cacheReady = FALSE
 dim shared as string g_cachePath
 dim shared as integer g_smartMathUdlCmdId = 0
-dim shared as wstring * MAX_PATH documentationFilePath
+dim shared as wstring * MAX_PATH nppRootDir ' set by initCommonPaths()
+dim shared as wstring * MAX_PATH smartmathDllDir ' set by initCommonPaths()
+dim shared as wstring * MAX_PATH documentationFilePath ' set by initCommonPaths()
 redim shared g_annText(0 to 0) as string
 redim shared g_cachedLineText(0 to 0) as string
 redim shared g_cachedResult(0 to 0) as string
@@ -88,10 +90,29 @@ function getSmartMathUdlId() as integer
   return 0
 end function
 
-private sub prepareDocumentationFilePath(hNppWnd as HWND)
-  dim as wstring * MAX_PATH nppDir
-  SendMessage(hNppWnd, NPPM_GETNPPDIRECTORY, MAX_PATH, cast(LPARAM, @nppDir))
-  documentationFilePath = nppDir & wstr("\plugins\doc\") & DOCUMENTATION_FILE_NAME
+private sub initCommonPaths(hNppWnd as HWND)
+  nppRootDir[0] = 0
+  SendMessage(hNppWnd, NPPM_GETNPPDIRECTORY, MAX_PATH, cast(LPARAM, @nppRootDir))
+
+  smartmathDllDir[0] = 0
+  GetModuleFileNameW(hInst, @smartmathDllDir, MAX_PATH)
+  dim as integer iLen = Len(smartmathDllDir)
+  dim as integer i
+  for i = iLen - 1 to 0 step -1
+    dim as ushort ch = smartmathDllDir[i]
+    if ch = asc("\") orelse ch = asc("/") then
+      smartmathDllDir[i] = 0 ' truncate at the last slash
+      exit for
+    end if
+  next i
+
+  documentationFilePath = smartmathDllDir & wstr("\doc\") & DOCUMENTATION_FILE_NAME
+  if GetFileAttributesW(@documentationFilePath) <> INVALID_FILE_ATTRIBUTES then exit sub
+
+  documentationFilePath = smartmathDllDir & wstr("\") & DOCUMENTATION_FILE_NAME
+  if GetFileAttributesW(@documentationFilePath) <> INVALID_FILE_ATTRIBUTES then exit sub
+
+  documentationFilePath = nppRootDir & wstr("\plugins\doc\") & DOCUMENTATION_FILE_NAME
 end sub
 
 sub ApplySmartMathUDL()
@@ -708,7 +729,7 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     Config_Load()
     OrganizeMenu()
     g_smartMathUdlCmdId = getSmartMathUdlId()
-    prepareDocumentationFilePath(nppData._nppHandle)
+    initCommonPaths(nppData._nppHandle)
     EnsureSciHooked()
     SendMessage(nppData._nppHandle, NPPM_ADDSCNMODIFIEDFLAGS, 0, SC_MOD_TEXT_FLAGS)
     UpdateUIState()
