@@ -12,6 +12,9 @@ const PLUGIN_NAME = wstr("Smart Math")
 const DOCUMENTATION_FILE_NAME = wstr("SmartMath.md")
 const UDL_NAME = wstr("SmartMath")
 const UDL_NAME_DARK = wstr("SmartMath (dark mode)")
+const UDL_FILE_NAME = wstr("userDefineLangs\SmartMath.udl.xml")
+const UDL_FILE_NAME_DARK = wstr("userDefineLangs\SmartMath_Dark.udl.xml")
+const AUTOCOMPL_FILE_NAME = wstr("autoCompletion\SmartMath.xml")
 const TB_BMP_ID = 100
 const TB_ICON_LIGHT_ID = 101
 const TB_ICON_DARK_ID = 102
@@ -113,6 +116,63 @@ private sub initCommonPaths(hNppWnd as HWND)
   if GetFileAttributesW(@documentationFilePath) <> INVALID_FILE_ATTRIBUTES then exit sub
 
   documentationFilePath = nppRootDir & wstr("\plugins\doc\") & DOCUMENTATION_FILE_NAME
+end sub
+
+private sub verifySyntaxFilesExist()
+  dim as boolean isUdlMissed = false
+  dim as boolean isUdlUnderDllDir = false
+  dim as boolean isUdlDarkMissed = false
+  dim as boolean isUdlDarkUnderDllDir = false
+  dim as boolean isAutoComplMissed = false
+  dim as boolean isAutoComplUnderDllDir = false
+  dim as wstring * MAX_PATH filePath
+
+  filePath = nppRootDir & wstr("\") & UDL_FILE_NAME
+  if GetFileAttributesW(@filePath) = INVALID_FILE_ATTRIBUTES then
+    isUdlMissed = true
+    filePath = smartmathDllDir & wstr("\") & UDL_FILE_NAME
+    if GetFileAttributesW(@filePath) <> INVALID_FILE_ATTRIBUTES then isUdlUnderDllDir = true
+  end if
+
+  filePath = nppRootDir & wstr("\") & UDL_FILE_NAME_DARK
+  if GetFileAttributesW(@filePath) = INVALID_FILE_ATTRIBUTES then
+    isUdlDarkMissed = true
+    filePath = smartmathDllDir & wstr("\") & UDL_FILE_NAME_DARK
+    if GetFileAttributesW(@filePath) <> INVALID_FILE_ATTRIBUTES then isUdlDarkUnderDllDir = true
+  end if
+
+  filePath = nppRootDir & wstr("\") & AUTOCOMPL_FILE_NAME
+  if GetFileAttributesW(@filePath) = INVALID_FILE_ATTRIBUTES then
+    isAutoComplMissed = true
+    filePath = smartmathDllDir & wstr("\") & AUTOCOMPL_FILE_NAME
+    if GetFileAttributesW(@filePath) <> INVALID_FILE_ATTRIBUTES then isAutoComplUnderDllDir = true
+  end if
+
+  if isUdlMissed orelse isUdlDarkMissed orelse isAutoComplMissed then
+    ' some syntax files are missing, show a warning message
+    dim as wstring * (MAX_PATH*6) msg
+    msg[0] = 0
+    msg &= wstr("Syntax files for ") & PLUGIN_NAME & wstr(" are missing.") & wchr(13) & wchr(10) & _
+           wstr("To enable Syntax Highlighting, you need the following files") & wchr(13) & wchr(10) & _
+           wstr("under """) & nppRootDir & wstr(""":") & wchr(13) & wchr(10)
+
+    if isUdlMissed then
+      msg &= wchr(13) & wchr(10) & UDL_FILE_NAME
+    end if
+    if isUdlDarkMissed then
+      msg &= wchr(13) & wchr(10) & UDL_FILE_NAME_DARK
+    end if
+    if isAutoComplMissed then
+      msg &= wchr(13) & wchr(10) & AUTOCOMPL_FILE_NAME
+    end if
+
+    if isUdlUnderDllDir orelse isUdlDarkUnderDllDir orelse isAutoComplUnderDllDir then
+      msg &= wchr(13) & wchr(10) & wchr(13) & wchr(10) & wstr("Please copy these files from:") & wchr(13) & wchr(10) & _
+             wchr(13) & wchr(10) & smartmathDllDir & wstr("\")
+    end if
+
+    MessageBoxW(nppData._nppHandle, @msg, PLUGIN_NAME, MB_OK or MB_ICONWARNING)
+  end if
 end sub
 
 sub ApplySmartMathUDL()
@@ -600,7 +660,10 @@ sub ToggleSyntaxHighlight cdecl()
   Config_SetSyntaxHighlight(enabled)
   Config_Save()
   SendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK, funcItems(IDX_SYNTAXHIGHLIGHT)._cmdID, iif(enabled, 1, 0))
-  if enabled andalso Config_IsFileEnabled(GetCurrentPath()) then ApplySmartMathUDL()
+  if enabled andalso Config_IsFileEnabled(GetCurrentPath()) then
+    verifySyntaxFilesExist()
+    ApplySmartMathUDL()
+  end if
 end sub
 
 sub ShowDocumentation cdecl()
@@ -730,6 +793,7 @@ sub beNotified(byval pNotify as SCNotification ptr) export
     OrganizeMenu()
     g_smartMathUdlCmdId = getSmartMathUdlId()
     initCommonPaths(nppData._nppHandle)
+    if Config_GetSyntaxHighlight() then verifySyntaxFilesExist()
     EnsureSciHooked()
     SendMessage(nppData._nppHandle, NPPM_ADDSCNMODIFIEDFLAGS, 0, SC_MOD_TEXT_FLAGS)
     UpdateUIState()
