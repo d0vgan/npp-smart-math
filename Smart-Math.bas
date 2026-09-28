@@ -94,28 +94,37 @@ function getSmartMathUdlId() as integer
 end function
 
 private sub initCommonPaths(hNppWnd as HWND)
+  dim as integer iLen, i
+  dim as ushort ch
+
   nppRootDir[0] = 0
   SendMessage(hNppWnd, NPPM_GETNPPDIRECTORY, MAX_PATH, cast(LPARAM, @nppRootDir))
+  iLen = Len(nppRootDir)
+  if iLen > 0 then
+    ch = nppRootDir[iLen - 1]
+    if ch = asc("\") orelse ch = asc("/") then
+      nppRootDir[iLen - 1] = 0 ' remove the trailing slash
+    end if
+  end if
 
   smartmathDllDir[0] = 0
   GetModuleFileNameW(hInst, @smartmathDllDir, MAX_PATH)
-  dim as integer iLen = Len(smartmathDllDir)
-  dim as integer i
+  iLen = Len(smartmathDllDir)
   for i = iLen - 1 to 0 step -1
-    dim as ushort ch = smartmathDllDir[i]
+    ch = smartmathDllDir[i]
     if ch = asc("\") orelse ch = asc("/") then
       smartmathDllDir[i] = 0 ' truncate at the last slash
       exit for
     end if
   next i
 
-  documentationFilePath = smartmathDllDir & wstr("\doc\") & DOCUMENTATION_FILE_NAME
+  documentationFilePath = smartmathDllDir & "\doc\" & DOCUMENTATION_FILE_NAME
   if GetFileAttributesW(@documentationFilePath) <> INVALID_FILE_ATTRIBUTES then exit sub
 
-  documentationFilePath = smartmathDllDir & wstr("\") & DOCUMENTATION_FILE_NAME
+  documentationFilePath = smartmathDllDir & "\" & DOCUMENTATION_FILE_NAME
   if GetFileAttributesW(@documentationFilePath) <> INVALID_FILE_ATTRIBUTES then exit sub
 
-  documentationFilePath = nppRootDir & wstr("\plugins\doc\") & DOCUMENTATION_FILE_NAME
+  documentationFilePath = nppRootDir & "\plugins\doc\" & DOCUMENTATION_FILE_NAME
 end sub
 
 private sub verifySyntaxFilesExist()
@@ -127,24 +136,24 @@ private sub verifySyntaxFilesExist()
   dim as boolean isAutoComplUnderDllDir = false
   dim as wstring * MAX_PATH filePath
 
-  filePath = nppRootDir & wstr("\") & UDL_FILE_NAME
+  filePath = nppRootDir & "\" & UDL_FILE_NAME
   if GetFileAttributesW(@filePath) = INVALID_FILE_ATTRIBUTES then
     isUdlMissed = true
-    filePath = smartmathDllDir & wstr("\") & UDL_FILE_NAME
+    filePath = smartmathDllDir & "\" & UDL_FILE_NAME
     if GetFileAttributesW(@filePath) <> INVALID_FILE_ATTRIBUTES then isUdlUnderDllDir = true
   end if
 
-  filePath = nppRootDir & wstr("\") & UDL_FILE_NAME_DARK
+  filePath = nppRootDir & "\" & UDL_FILE_NAME_DARK
   if GetFileAttributesW(@filePath) = INVALID_FILE_ATTRIBUTES then
     isUdlDarkMissed = true
-    filePath = smartmathDllDir & wstr("\") & UDL_FILE_NAME_DARK
+    filePath = smartmathDllDir & "\" & UDL_FILE_NAME_DARK
     if GetFileAttributesW(@filePath) <> INVALID_FILE_ATTRIBUTES then isUdlDarkUnderDllDir = true
   end if
 
-  filePath = nppRootDir & wstr("\") & AUTOCOMPL_FILE_NAME
+  filePath = nppRootDir & "\" & AUTOCOMPL_FILE_NAME
   if GetFileAttributesW(@filePath) = INVALID_FILE_ATTRIBUTES then
     isAutoComplMissed = true
-    filePath = smartmathDllDir & wstr("\") & AUTOCOMPL_FILE_NAME
+    filePath = smartmathDllDir & "\" & AUTOCOMPL_FILE_NAME
     if GetFileAttributesW(@filePath) <> INVALID_FILE_ATTRIBUTES then isAutoComplUnderDllDir = true
   end if
 
@@ -152,23 +161,23 @@ private sub verifySyntaxFilesExist()
     ' some syntax files are missing, show a warning message
     dim as wstring * (MAX_PATH*6) msg
     msg[0] = 0
-    msg &= wstr("Syntax files for ") & PLUGIN_NAME & wstr(" are missing.") & wchr(13) & wchr(10) & _
-           wstr("To enable Syntax Highlighting, you need the following files") & wchr(13) & wchr(10) & _
-           wstr("under """) & nppRootDir & wstr(""":") & wchr(13) & wchr(10)
+    msg &= "Syntax files for " & PLUGIN_NAME & " are missing." & wchr(13, 10) & _
+           "To enable Syntax Highlighting, place the following files" & wchr(13, 10) & _
+           "inside """ & nppRootDir & """:" & wchr(13, 10)
 
     if isUdlMissed then
-      msg &= wchr(13) & wchr(10) & UDL_FILE_NAME
+      msg &= wchr(13, 10) & UDL_FILE_NAME
     end if
     if isUdlDarkMissed then
-      msg &= wchr(13) & wchr(10) & UDL_FILE_NAME_DARK
+      msg &= wchr(13, 10) & UDL_FILE_NAME_DARK
     end if
     if isAutoComplMissed then
-      msg &= wchr(13) & wchr(10) & AUTOCOMPL_FILE_NAME
+      msg &= wchr(13, 10) & AUTOCOMPL_FILE_NAME
     end if
 
     if isUdlUnderDllDir orelse isUdlDarkUnderDllDir orelse isAutoComplUnderDllDir then
-      msg &= wchr(13) & wchr(10) & wchr(13) & wchr(10) & wstr("Please copy these files from:") & wchr(13) & wchr(10) & _
-             wchr(13) & wchr(10) & smartmathDllDir & wstr("\")
+      msg &= wchr(13, 10, 13, 10) & "Please copy these files from:" & wchr(13, 10) & _
+             wchr(13, 10) & smartmathDllDir & "\"
     end if
 
     MessageBoxW(nppData._nppHandle, @msg, PLUGIN_NAME, MB_OK or MB_ICONWARNING)
@@ -669,7 +678,7 @@ end sub
 sub ShowDocumentation cdecl()
   dim as wstring * (MAX_PATH + 64) sMsg
   if GetFileAttributesW(@documentationFilePath) = INVALID_FILE_ATTRIBUTES then
-    sMsg = wstr("The file does not exist:") & wchr(13) & wchr(10) & documentationFilePath
+    sMsg = "The file does not exist:" & wchr(13, 10) & documentationFilePath
     MessageBoxW(nppData._nppHandle, @sMsg, PLUGIN_NAME, MB_OK or MB_ICONWARNING)
     exit sub
   end if
