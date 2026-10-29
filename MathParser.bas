@@ -10070,6 +10070,7 @@ private function TryBuiltinUniqueScalars(uniqueVals() as ScalarValue, byval c as
   redim used(0 to cap - 1)
   dim outCount as Integer = 0
   dim i as Integer
+  dim seenNan as Boolean = FALSE
   dim useComplexUnique as Boolean = FALSE
   if Parser_SupportComplexNumbers then
     for i = 0 to c - 1
@@ -10080,6 +10081,15 @@ private function TryBuiltinUniqueScalars(uniqueVals() as ScalarValue, byval c as
     next i
   end if
   for i = 0 to c - 1
+    if IsNaNValue(uniqueVals(i).scalar) orelse IsNaNValue(uniqueVals(i).imag) then
+      ' nan != nan stays false. unique keeps only the first NaN.
+      if seenNan = FALSE then
+        seenNan = TRUE
+        tmp(outCount) = uniqueVals(i)
+        outCount += 1
+      end if
+      continue for
+    end if
     dim seen as Boolean = FALSE
     if useComplexUnique then
       dim j as Integer
@@ -10095,11 +10105,6 @@ private function TryBuiltinUniqueScalars(uniqueVals() as ScalarValue, byval c as
       end if
     else
       dim v as Double = uniqueVals(i).scalar
-      if v <> v then
-        tmp(outCount) = uniqueVals(i)
-        outCount += 1
-        continue for
-      end if
       dim key as ULongInt
       if ScalarIsTime(uniqueVals(i)) then
         key = UniqueHashKeyFromDouble(CDbl(TimeTotalMsFromScalarValue(uniqueVals(i))))

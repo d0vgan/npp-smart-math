@@ -816,6 +816,7 @@ Advanced examples:
 
 - `nan == nan` evaluates to `0` (IEEE unordered: NaN is not equal to any value, including another NaN).
 - `nan != nan` is `1`.
+- `unique` keeps only the first NaN. Later `nan` and `-nan` values are dropped.
 
 These behaviors may differ from other tools/languages.
 
