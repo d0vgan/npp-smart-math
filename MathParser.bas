@@ -2,6 +2,7 @@
 #include once "Inc\MathParser.bi"
 #include once "MathParserRawResult.bas"
 
+'' SM_FIXED_WIDTH_BEGIN: CRT libm is double based; the Lib* wrappers below are the only callers (retarget SmFloat there).
 extern "C"
 declare function acosh (byval x as double) as double
 declare function asinh (byval x as double) as double
@@ -10,20 +11,34 @@ declare function atanh (byval x as double) as double
 declare function libc_sin alias "sin" (byval x as double) as double
 declare function libc_cos alias "cos" (byval x as double) as double
 declare function libc_tan alias "tan" (byval x as double) as double
+declare function libc_log10 alias "log10" (byval x as double) as double
 declare function libc_frexp alias "frexp" (byval x as double, byref ex as long) as double
 declare function libc_ldexp alias "ldexp" (byval x as double, byval ex as long) as double
 end extern
+'' SM_FIXED_WIDTH_END
 
-private function LibSin(byval x as Double) as Double
+private function LibSin(byval x as SmFloat) as SmFloat
   return libc_sin(x)
 end function
 
-private function LibCos(byval x as Double) as Double
+private function LibCos(byval x as SmFloat) as SmFloat
   return libc_cos(x)
 end function
 
-private function LibTan(byval x as Double) as Double
+private function LibTan(byval x as SmFloat) as SmFloat
   return libc_tan(x)
+end function
+
+private function LibLog10(byval x as SmFloat) as SmFloat
+  return libc_log10(x)
+end function
+
+private function LibFrexp(byval x as SmFloat, byref ex as Long) as SmFloat
+  return libc_frexp(x, ex)
+end function
+
+private function LibLdexp(byval x as SmFloat, byval ex as Long) as SmFloat
+  return libc_ldexp(x, ex)
 end function
 
 const FB_STR_AT as string = " at "
@@ -128,7 +143,6 @@ const FB_STR_PI as string = "pi"
 const FB_STR_E as string = "e"
 const FB_STR_I as string = "i"
 const FB_STR_EXPLICIT_FLOAT_FRAC as string = ".0"
-const FB_STR_FMT_SCIENTIFIC_16 as string = "%.15e"
 const FB_STR_INF as string = "inf"
 const FB_STR_NAN as string = "nan"
 const FB_STR_PAR as string = "()"
@@ -213,6 +227,8 @@ const FB_STR_PAR_EXPECTS_A_POSITIVE_INTEGER as string = "() expects a positive i
 const FB_STR_PAR_EXPECTS_SCALAR_VALUES as string = "() expects scalar values"
 const FB_STR_PAR_EXPECTS_SCALAR_MIN_SLASH as string = "() expects scalar min/max"
 const FB_STR_PAR_EXPECTS_INTEGER_VALUES as string = "() expects integer values"
+const FB_STR_INPUT_LIMITED_TO_64_BITS as string = " input is limited to 64 bits"
+const FB_STR_FACTORINT_UNABLE_TO_FACTOR as string = " could not factor the input"
 const FB_STR_INVALID_HEX_LITERAL as string = "invalid hex literal"
 const FB_STR_INVALID_BINARY_LITERAL as string = "invalid binary literal"
 const FB_STR_INVALID_OCTAL_LITERAL as string = "invalid octal literal"
@@ -251,10 +267,13 @@ const FB_STR_SORTBY_EXPECTS_UNARY_FUNCTION as string = "sortby expects a functio
 const FB_STR_FILTER_EXPECTS_ONE_FUNCTION as string = "filter expects exactly one function"
 const FB_STR_FILTER_EXPECTS_UNARY_FUNCTION as string = "filter expects a function that takes 1 parameter"
 const FB_STR_FILTER_PREDICATE_MUST_BE_SCALAR_OR_ARRAY as string = "filter predicate must return a scalar or an array"
-const RATIO_APPROX_EPS as Double = 1e-14
-const RATIO_MAX_DENOMINATOR as LongInt = 10000000
-const RATIO_MAX_POWER10_EXP as Integer = 18
+const RATIO_APPROX_EPS as SmFloat = SM_TOL_LOST1
+const RATIO_MAX_DENOMINATOR as SmInt = 10000000
+'' Denominators, semiconvergent products (h * q) and 1 / RATIO_MAX_DENOMINATOR must be exact in SmInt and SmFloat.
+SM_STATIC_ASSERT(SM_ASSERT_RATIO_MAX_DENOMINATOR, RATIO_MAX_DENOMINATOR < SM_INT_MAX \ 8 andalso RATIO_MAX_DENOMINATOR < SM_MAX_EXACT_INT_FROM_FLOAT)
+const RATIO_MAX_POWER10_EXP as Integer = SM_MAX_POW10_EXP_OF_INT
 const RATIO_SEMICONV_LINEAR_THRESH as Integer = 64
+const RATIO_MAX_CF_TERMS as Integer = 64
 const FB_STR_SORTBY_KEY_MUST_BE_SCALAR_OR_ARRAY as string = "sortby key function must return a scalar or an array"
 const LAMBDA_BODY_UNTIL_RPAREN as Integer = 1
 const LAMBDA_BODY_UNTIL_SEMICOLON_EOF as Integer = 2
@@ -262,20 +281,11 @@ const LAMBDA_BODY_UNTIL_ARG_DELIM as Integer = 3
 const FB_STR_PAR_ARRAY_COMMA_FUNC as string = "(array, func)"
 const FB_STR_SEMICOLON_UNKNOWN_FUNCTION_COLON as string = "; unknown function: "
 
-const FB_U64_MAX as ULongInt = &hFFFFFFFFFFFFFFFFULL
-const FB_I64_MIN as LongInt = -9223372036854775807 - 1 ' -0x8000000000000000
-const FB_I64_MAX as LongInt = 9223372036854775807 ' 0x7FFFFFFFFFFFFFFF
-const FB_I64_MAX_U as ULongInt = 9223372036854775807
-const FB_I64_MIN_MAG_U as ULongInt = &h8000000000000000ULL
-const FB_I64_MIN_D as Double = -9223372036854775808.0
-const FB_I64_MAX_D as Double = 9223372036854775807.0
-const FB_MAX_EXACT_INT_FROM_DOUBLE as Double = 9007199254740992.0 ' 2^53
-const FB_UNIT_ROOT_EXPONENT_TOL as Double = 1e-15
-const FB_HYPOT_DIRECT_MAX as Double = 1e150
-const FB_HYPOT_DIRECT_MIN as Double = 1e-150
-'' IEEE double: 2^64 (next representable above UINT64_MAX).
-const FB_2_POW_64_D as Double = 1.8446744073709551616e+19
-const FB_PI_VAL as Double = 4.0 * atn(1.0) ' pi
+'' Integer/float limits, tolerances and thresholds come from Inc\MathParserTypes.bi (derived from SmFloat/SmInt/SmUInt).
+const FB_PI_VAL as SmFloat = 4.0 * atn(1.0) ' pi
+const FB_HALF_PI_VAL as SmFloat = FB_PI_VAL / 2.0
+const FB_QUARTER_PI_VAL as SmFloat = FB_PI_VAL / 4.0
+const FB_SQRT_TWO_PI_VAL as SmFloat = sqr(2.0 * FB_PI_VAL)
 
 ' -----------------------------------------------------------------------------
 '  ASCII byte constants (single-byte stream; multi-byte UTF-8 not interpreted)
@@ -384,18 +394,18 @@ enum ValueKind
 end enum
 
 enum ScalarStorageKind
-  SSK_FLOATINGPOINT = 0
-  SSK_INT64 = 1
-  SSK_UINT64 = 2
+  SSK_SMFLOATINGPOINT = 0
+  SSK_SMINT = 1
+  SSK_SMUINT = 2
   SSK_TIME = 3
 end enum
 
 enum ScalarFlags
-  SVF_EXACT_INT64_VALID = &h01
-  SVF_EXACT_UINT64_VALID = &h02
+  SVF_EXACT_SMINT_VALID = &h01
+  SVF_EXACT_SMUINT_VALID = &h02
   SVF_DEC_SCI_POW63_HIGH = &h10
-  SVF_IMAG_EXACT_INT64_VALID = &h20
-  SVF_IMAG_EXACT_UINT64_VALID = &h40
+  SVF_IMAG_EXACT_SMINT_VALID = &h20
+  SVF_IMAG_EXACT_SMUINT_VALID = &h40
   SVF_RENDER_RATIONAL = &h80
   SVF_IMAG_RENDER_RATIONAL = &h100
   SVF_RENDER_INT_POWER = &h200
@@ -618,21 +628,21 @@ type ScalarValue
   scalarStorageKind as ScalarStorageKind
   '' Do not read ``flags`` for exact-int or render-rational policy; use ScalarHas* / ScalarExact* getters.
   flags as UInteger
-  scalar as Double
+  scalar as SmFloat
   '' Numerator for ``SVF_RENDER_RATIONAL`` and exact integers; use getters, not direct reads, in eval paths.
-  exactInt64 as LongInt
+  exactInt as SmInt
   '' Denominator for ``SVF_RENDER_RATIONAL`` and exact uintegers; use getters, not direct reads, in eval paths.
-  exactUInt64 as ULongInt
-  imag as Double
+  exactUInt as SmUInt
+  imag as SmFloat
   '' Imaginary numerator; use ScalarImag* getters (``SVF_IMAG_RENDER_RATIONAL`` uses imag exact fields).
-  imagExactInt64 as LongInt
-  imagExactUInt64 as ULongInt
-  declare property exactInt64Valid() as Boolean
-  declare property exactInt64Valid(byval v as Boolean)
-  declare property exactUInt64Valid() as Boolean
-  declare property exactUInt64Valid(byval v as Boolean)
-  declare property decScientificPow63High() as Boolean
-  declare property decScientificPow63High(byval v as Boolean)
+  imagExactInt as SmInt
+  imagExactUInt as SmUInt
+  declare property exactIntValid() as Boolean
+  declare property exactIntValid(byval v as Boolean)
+  declare property exactUIntValid() as Boolean
+  declare property exactUIntValid(byval v as Boolean)
+  declare property decScientificSmIntBoundHigh() as Boolean
+  declare property decScientificSmIntBoundHigh(byval v as Boolean)
 end type
 
 type EvalValue
@@ -650,78 +660,80 @@ type EvalValue
   ' uhex/uoct/ubin: two's complement as unsigned; hex/oct/bin: signed magnitude for negatives
   declare property scalarStorageKind() as Integer
   declare property scalarStorageKind(byval v as Integer)
-  declare property scalar() byref as Double
-  declare property scalar(byval v as Double)
-  declare property exactInt64Valid() as Boolean
-  declare property exactInt64Valid(byval v as Boolean)
-  declare property exactInt64() byref as LongInt
-  declare property exactInt64(byval v as LongInt)
-  declare property exactUInt64Valid() as Boolean
-  declare property exactUInt64Valid(byval v as Boolean)
-  declare property exactUInt64() byref as ULongInt
-  declare property exactUInt64(byval v as ULongInt)
+  declare property scalar() byref as SmFloat
+  declare property scalar(byval v as SmFloat)
+  declare property exactIntValid() as Boolean
+  declare property exactIntValid(byval v as Boolean)
+  declare property exactInt() byref as SmInt
+  declare property exactInt(byval v as SmInt)
+  declare property exactUIntValid() as Boolean
+  declare property exactUIntValid(byval v as Boolean)
+  declare property exactUInt() byref as SmUInt
+  declare property exactUInt(byval v as SmUInt)
   declare property expandArgs() as Boolean
   declare property expandArgs(byval v as Boolean)
   declare property renderUnsigned() as Boolean
   declare property renderUnsigned(byval v as Boolean)
 end type
 
-type DoubleBits
+'' Bit-pattern view of a float, used only for hashing (UniqueHashKeyFromFloat); needs a same-size integer.
+SM_STATIC_ASSERT(SM_ASSERT_FLOATBITS_SIZE, sizeof(SmFloat) = sizeof(SmUInt))
+type FloatBits
   union
-    d as Double
-    u as ULongInt
+    d as SmFloat
+    u as SmUInt
   end union
 end type
 
 declare function ScalarHasRenderRational(byref sv as ScalarValue) as Boolean
 declare function ScalarHasImagRenderRational(byref sv as ScalarValue) as Boolean
-declare function ScalarExactInt64Valid(byref sv as ScalarValue) as Boolean
-declare function ScalarExactUInt64Valid(byref sv as ScalarValue) as Boolean
-declare function ScalarImagExactInt64Valid(byref sv as ScalarValue) as Boolean
-declare function ScalarImagExactUInt64Valid(byref sv as ScalarValue) as Boolean
+declare function ScalarExactSmIntValid(byref sv as ScalarValue) as Boolean
+declare function ScalarExactSmUIntValid(byref sv as ScalarValue) as Boolean
+declare function ScalarImagExactSmIntValid(byref sv as ScalarValue) as Boolean
+declare function ScalarImagExactSmUIntValid(byref sv as ScalarValue) as Boolean
 declare function ScalarImagExactMetadataMatchesFloat(byref sv as ScalarValue) as Boolean
 declare sub ScalarClearCartesianRenderExact(byref sv as ScalarValue)
-declare sub ScalarApplyExactInt64Part(byref sv as ScalarValue, byval imagPart as Boolean, byval n as LongInt)
-declare sub ScalarApplyReducedRationalPart(byref sv as ScalarValue, byval imagPart as Boolean, byval num as LongInt, byval den as ULongInt)
-declare sub RawCartesianAssignReducedRational(byval num as LongInt, byval den as ULongInt, byref outC as RawCartesianScalar)
-declare function TryGetExactInt64FromDouble(byval n as Double, byref outV as LongInt) as Boolean
+declare sub ScalarApplyExactSmIntPart(byref sv as ScalarValue, byval imagPart as Boolean, byval n as SmInt)
+declare sub ScalarApplyReducedRationalPart(byref sv as ScalarValue, byval imagPart as Boolean, byval num as SmInt, byval den as SmUInt)
+declare sub RawCartesianAssignReducedRational(byval num as SmInt, byval den as SmUInt, byref outC as RawCartesianScalar)
+declare function TryGetExactSmIntFromFloat(byval n as SmFloat, byref outV as SmInt) as Boolean
 declare sub ScalarRepairExactMetadata(byref sv as ScalarValue)
-declare function ScalarNumericReal(byref sv as ScalarValue) as Double
-declare function ScalarNumericImag(byref sv as ScalarValue) as Double
-declare sub ScalarSetExactUInt64Valid(byref sv as ScalarValue, byval v as Boolean)
-declare sub ScalarSetExactInt64Valid(byref sv as ScalarValue, byval v as Boolean)
-declare sub ScalarSyncExactInt64WithUIntMirror(byref sv as ScalarValue, byval n as LongInt)
-declare sub ScalarSyncExactUInt64WithIntMirror(byref sv as ScalarValue, byval n as ULongInt)
-declare sub ScalarSyncImagExactInt64WithUIntMirror(byref sv as ScalarValue, byval n as LongInt)
+declare function ScalarNumericReal(byref sv as ScalarValue) as SmFloat
+declare function ScalarNumericImag(byref sv as ScalarValue) as SmFloat
+declare sub ScalarSetExactSmUIntValid(byref sv as ScalarValue, byval v as Boolean)
+declare sub ScalarSetExactSmIntValid(byref sv as ScalarValue, byval v as Boolean)
+declare sub ScalarSyncExactSmIntWithSmUIntMirror(byref sv as ScalarValue, byval n as SmInt)
+declare sub ScalarSyncExactSmUIntWithIntMirror(byref sv as ScalarValue, byval n as SmUInt)
+declare sub ScalarSyncImagExactSmIntWithSmUIntMirror(byref sv as ScalarValue, byval n as SmInt)
 declare sub ValueSetArrayFromScalarValues(byref outV as EvalValue, vals() as ScalarValue)
-declare function GcdULong(byval a as ULongInt, byval b as ULongInt) as ULongInt
-declare function TryPowULong(byval baseV as ULongInt, byval expV as ULongInt, byref outV as ULongInt) as Boolean
+declare function GcdSmUInt(byval a as SmUInt, byval b as SmUInt) as SmUInt
+declare function TryPowSmUInt(byval baseV as SmUInt, byval expV as SmUInt, byref outV as SmUInt) as Boolean
 
-property ScalarValue.exactInt64Valid() as Boolean
-  return ScalarExactInt64Valid(this)
+property ScalarValue.exactIntValid() as Boolean
+  return ScalarExactSmIntValid(this)
 end property
 
-property ScalarValue.exactInt64Valid(byval v as Boolean)
-  ScalarSetExactInt64Valid(this, v)
+property ScalarValue.exactIntValid(byval v as Boolean)
+  ScalarSetExactSmIntValid(this, v)
 end property
 
-property ScalarValue.exactUInt64Valid() as Boolean
-  return ScalarExactUInt64Valid(this)
+property ScalarValue.exactUIntValid() as Boolean
+  return ScalarExactSmUIntValid(this)
 end property
 
-property ScalarValue.exactUInt64Valid(byval v as Boolean)
+property ScalarValue.exactUIntValid(byval v as Boolean)
   if v then
-    this.flags or= SVF_EXACT_UINT64_VALID
+    this.flags or= SVF_EXACT_SMUINT_VALID
   else
-    this.flags and= not CUInt(SVF_EXACT_UINT64_VALID)
+    this.flags and= not CUInt(SVF_EXACT_SMUINT_VALID)
   end if
 end property
 
-property ScalarValue.decScientificPow63High() as Boolean
+property ScalarValue.decScientificSmIntBoundHigh() as Boolean
   return (this.flags and SVF_DEC_SCI_POW63_HIGH) <> 0
 end property
 
-property ScalarValue.decScientificPow63High(byval v as Boolean)
+property ScalarValue.decScientificSmIntBoundHigh(byval v as Boolean)
   if v then
     this.flags or= SVF_DEC_SCI_POW63_HIGH
   else
@@ -737,44 +749,44 @@ property EvalValue.scalarStorageKind(byval v as Integer)
   this.scalarValue.scalarStorageKind = v
 end property
 
-property EvalValue.scalar() byref as Double
+property EvalValue.scalar() byref as SmFloat
   return this.scalarValue.scalar
 end property
 
-property EvalValue.scalar(byval v as Double)
+property EvalValue.scalar(byval v as SmFloat)
   this.scalarValue.scalar = v
 end property
 
-property EvalValue.exactInt64Valid() as Boolean
-  return this.scalarValue.exactInt64Valid
+property EvalValue.exactIntValid() as Boolean
+  return this.scalarValue.exactIntValid
 end property
 
-property EvalValue.exactInt64Valid(byval v as Boolean)
-  this.scalarValue.exactInt64Valid = v
+property EvalValue.exactIntValid(byval v as Boolean)
+  this.scalarValue.exactIntValid = v
 end property
 
-property EvalValue.exactInt64() byref as LongInt
-  return this.scalarValue.exactInt64
+property EvalValue.exactInt() byref as SmInt
+  return this.scalarValue.exactInt
 end property
 
-property EvalValue.exactInt64(byval v as LongInt)
-  this.scalarValue.exactInt64 = v
+property EvalValue.exactInt(byval v as SmInt)
+  this.scalarValue.exactInt = v
 end property
 
-property EvalValue.exactUInt64Valid() as Boolean
-  return this.scalarValue.exactUInt64Valid
+property EvalValue.exactUIntValid() as Boolean
+  return this.scalarValue.exactUIntValid
 end property
 
-property EvalValue.exactUInt64Valid(byval v as Boolean)
-  this.scalarValue.exactUInt64Valid = v
+property EvalValue.exactUIntValid(byval v as Boolean)
+  this.scalarValue.exactUIntValid = v
 end property
 
-property EvalValue.exactUInt64() byref as ULongInt
-  return this.scalarValue.exactUInt64
+property EvalValue.exactUInt() byref as SmUInt
+  return this.scalarValue.exactUInt
 end property
 
-property EvalValue.exactUInt64(byval v as ULongInt)
-  this.scalarValue.exactUInt64 = v
+property EvalValue.exactUInt(byval v as SmUInt)
+  this.scalarValue.exactUInt = v
 end property
 
 property EvalValue.renderBase() as Integer
@@ -834,9 +846,13 @@ end type
 '  assigning to x removes user function x (see SetUserFunction / assignment path).
 
 dim shared variables() as VarEntry
+dim shared variableCount as Integer = 0
+dim shared variableCap as Integer = 0
 dim shared userFunctions() as FuncEntry
+dim shared userFunctionCount as Integer = 0
+dim shared userFunctionCap as Integer = 0
 dim shared pStream as ZString ptr
-dim shared parseError as Integer
+dim shared parseError as Boolean
 dim shared syntaxCheckDepth as Integer
 dim shared iifDeferCallArity as Integer
 dim shared arrayIndexBracketDepth as Integer = 0
@@ -852,8 +868,13 @@ dim shared functionVariableCount as Integer
 #endif
 dim shared evalDepth as Integer
 const UDF_CALL_STACK_MAX as Integer = 128
+'' Bound-body nesting (UDF + lambda), mirrored from C++ kMaxEvalDepth.
+const BOUND_EVAL_DEPTH_MAX as Integer = 128
 dim shared udfCallStack(0 to UDF_CALL_STACK_MAX - 1) as String
 dim shared udfCallStackSp as Integer
+dim shared boundEvalDepth as Integer
+'' Smoke can set this before Parser_TryEvaluateEx; ResetTopLevelEvaluationState applies it once then clears it.
+common shared smBoundEvalDepthSeed as Integer
 dim shared validatingUserFunctionName as String
 ' suppressBareFunctionTailHint: skip bare-function tail hints when ';' context was lost.
 ' Path A: whole bare name + ';' (e.g. cos;) -> unexpected token in TryEvaluateTopLevelStatements.
@@ -871,45 +892,75 @@ dim shared Parser_SupportComplexNumbers as Boolean = FALSE
 dim shared Parser_SupportTimeValues as Boolean = TRUE
 dim shared Parser_SupportLambdaFunctions as Boolean = TRUE
 
-private function MakeNaN() as Double
+' Without a seed every launch repeats one rnd sequence; tests still call Randomize <n> for determinism.
+private sub SeedParserRandomOnce() constructor
+  Randomize
+end sub
+
+private function MakeNaN() as SmFloat
   return 0.0 / 0.0
 end function
 
-private function IsNaNValue(byval d as Double) as Boolean
+private function IsNaNValue(byval d as SmFloat) as Boolean
   return (_isnan(d) <> 0)
 end function
 
-private function IsInfValue(byval d as Double) as Boolean
+private function IsInfValue(byval d as SmFloat) as Boolean
   if _isnan(d) <> 0 then return FALSE
-  dim infV as Double = 1.0 / 0.0
+  dim infV as SmFloat = 1.0 / 0.0
   return abs(d) = infV
 end function
 
-private function IsNonFiniteValue(byval d as Double) as Boolean
+private function IsNonFiniteValue(byval d as SmFloat) as Boolean
   return IsNaNValue(d) orelse IsInfValue(d)
 end function
 
-private function TryRoundHalfUpDoubleToLongInt(byval x as Double, byref outV as LongInt) as Boolean
+'' Round half up for x >= 0. x - floor(x) is exact, unlike floor(x + 0.5), which rounds 0.49999999999999994 up to 1.
+private function RoundHalfUpNonNegFloat(byval x as SmFloat) as SmFloat
+  dim t as SmFloat = floor(x)
+  if x - t >= 0.5 then t += 1
+  return t
+end function
+
+private function TryRoundHalfUpFloatToSmInt(byval x as SmFloat, byref outV as SmInt) as Boolean
   '' Range check first: Int() itself wraps for |x| >= 2^63.
-  if IsNonFiniteValue(x) orelse x < FB_I64_MIN_D orelse x >= -FB_I64_MIN_D then return FALSE
-  if x = FB_I64_MIN_D then
-    outV = FB_I64_MIN
+  if IsNonFiniteValue(x) orelse x < SM_FLOAT_SMINT_MIN orelse x >= SM_FLOAT_SMINT_BOUND then return FALSE
+  if x = SM_FLOAT_SMINT_MIN then
+    outV = SM_INT_MIN
   elseif x >= 0 then
-    outV = CLngInt(Int(x + 0.5))
+    outV = SmCInt(RoundHalfUpNonNegFloat(x))
   else
-    outV = -CLngInt(Int(-x + 0.5))
+    outV = -SmCInt(RoundHalfUpNonNegFloat(-x))
   end if
   return TRUE
 end function
 
-'' For values already known to be in int64 range; returns 0 otherwise.
-private function RoundHalfUpDoubleToLongInt(byval x as Double) as LongInt
-  dim r as LongInt
-  if TryRoundHalfUpDoubleToLongInt(x, r) then return r
+'' Nearest integer (half away from zero) as SmInt, like C++ tryRoundFloatToSmInt. FALSE (outV untouched) for NaN,
+'' infinity or a rounded value outside the SmInt range [-2^(b-1), 2^(b-1)).
+private function TryRoundFloatToSmInt(byval x as SmFloat, byref outV as SmInt) as Boolean
+  dim r as SmFloat = round(x)
+  if IsNonFiniteValue(r) orelse r < SM_FLOAT_SMINT_MIN orelse r >= SM_FLOAT_SMINT_BOUND then return FALSE
+  outV = SmCInt(r)
+  return TRUE
+end function
+
+'' Nearest integer (half away from zero) as SmUInt, like C++ tryRoundFloatToSmUInt. FALSE (outV untouched) for NaN,
+'' infinity or a rounded value outside the SmUInt range [0, 2^b).
+private function TryRoundFloatToSmUInt(byval x as SmFloat, byref outV as SmUInt) as Boolean
+  dim r as SmFloat = round(x)
+  if IsNonFiniteValue(r) orelse r < 0.0 orelse r >= SM_FLOAT_SMUINT_BOUND then return FALSE
+  outV = SmCUInt(r)
+  return TRUE
+end function
+
+'' For values already known to be in SmInt range; returns 0 otherwise.
+private function RoundHalfUpFloatToSmInt(byval x as SmFloat) as SmInt
+  dim r as SmInt
+  if TryRoundHalfUpFloatToSmInt(x, r) then return r
   return 0
 end function
 
-private function ULongIntToString(byval x as ULongInt) as String
+private function SmUIntToString(byval x as SmUInt) as String
   if x = 0 then return "0"
   dim s as String = ""
   while x > 0
@@ -919,7 +970,7 @@ private function ULongIntToString(byval x as ULongInt) as String
   return s
 end function
 
-private function Pad2Digits(byval n as LongInt) as String
+private function Pad2Digits(byval n as SmInt) as String
   if n < 0 then n = 0
   if n >= 100 then return ltrim(str(n))
   if n >= 10 then return chr(48 + n \ 10) & chr(48 + n mod 10)
@@ -931,34 +982,34 @@ private function ScalarIsTime(byref sv as ScalarValue) as Boolean
   return (sv.scalarStorageKind = SSK_TIME)
 end function
 
-private function TimeTotalMsFromScalarValue(byref sv as ScalarValue) as LongInt
-  return sv.exactInt64
+private function TimeTotalMsFromScalarValue(byref sv as ScalarValue) as SmInt
+  return sv.exactInt
 end function
 
-private function FormatTimeCanonicalFromMs(byval totalMs as LongInt) as String
+private function FormatTimeCanonicalFromMs(byval totalMs as SmInt) as String
   dim neg as Boolean = (totalMs < 0)
-  dim rU as ULongInt
+  dim rU as SmUInt
   if neg then
-    if totalMs = FB_I64_MIN then
-      rU = CULngInt(FB_I64_MIN_MAG_U)
+    if totalMs = SM_INT_MIN then
+      rU = SmCUInt(SM_INT_MIN_MAG)
     else
-      rU = CULngInt(-totalMs)
+      rU = SmCUInt(-totalMs)
     end if
   else
-    rU = CULngInt(totalMs)
+    rU = SmCUInt(totalMs)
   end if
-  dim msPart as LongInt = CLngInt(rU mod 1000ull)
-  rU = rU \ 1000ull
-  dim sPart as LongInt = CLngInt(rU mod 60ull)
-  rU = rU \ 60ull
-  dim mPart as LongInt = CLngInt(rU mod 60ull)
-  rU = rU \ 60ull
-  dim hPart as LongInt = CLngInt(rU mod 24ull)
-  rU = rU \ 24ull
-  dim dPart as ULongInt = rU
+  dim msPart as SmInt = SmCInt(rU mod SmCUInt(1000))
+  rU = rU \ SmCUInt(1000)
+  dim sPart as SmInt = SmCInt(rU mod SmCUInt(60))
+  rU = rU \ SmCUInt(60)
+  dim mPart as SmInt = SmCInt(rU mod SmCUInt(60))
+  rU = rU \ SmCUInt(60)
+  dim hPart as SmInt = SmCInt(rU mod SmCUInt(24))
+  rU = rU \ SmCUInt(24)
+  dim dPart as SmUInt = rU
   dim body as String
-  if dPart > 0ull then
-    body = ULongIntToString(dPart) & ":" & Pad2Digits(hPart) & ":" & Pad2Digits(mPart) & ":" & Pad2Digits(sPart)
+  if dPart > SmCUInt(0) then
+    body = SmUIntToString(dPart) & ":" & Pad2Digits(hPart) & ":" & Pad2Digits(mPart) & ":" & Pad2Digits(sPart)
   elseif hPart > 0 then
     body = Pad2Digits(hPart) & ":" & Pad2Digits(mPart) & ":" & Pad2Digits(sPart)
   else
@@ -971,26 +1022,26 @@ private function FormatTimeCanonicalFromMs(byval totalMs as LongInt) as String
   return body
 end function
 
-private sub ValueSetTimeMs(byref v as EvalValue, byval totalMs as LongInt)
+private sub ValueSetTimeMs(byref v as EvalValue, byval totalMs as SmInt)
   v.kind = VK_SCALAR
   v.scalarStorageKind = SSK_TIME
-  v.scalar = CDbl(totalMs) / 1000.0
-  v.exactInt64Valid = FALSE
-  v.exactInt64 = totalMs
-  v.exactUInt64Valid = FALSE
-  v.exactUInt64 = 0
+  v.scalar = SmCFloat(totalMs) / 1000.0
+  v.exactIntValid = FALSE
+  v.exactInt = totalMs
+  v.exactUIntValid = FALSE
+  v.exactUInt = 0
   v.expandArgs = FALSE
   v.renderBase = 10
   v.renderUnsigned = FALSE
   erase v.arr
 end sub
 
-private function TryAddTimeMsChecked(byval a as LongInt, byval b as LongInt, byref outMs as LongInt) as Boolean
-  return TryRoundHalfUpDoubleToLongInt(CDbl(a) + CDbl(b), outMs)
+private function TryAddTimeMsChecked(byval a as SmInt, byval b as SmInt, byref outMs as SmInt) as Boolean
+  return TryRoundHalfUpFloatToSmInt(SmCFloat(a) + SmCFloat(b), outMs)
 end function
 
-private function TrySubTimeMsChecked(byval a as LongInt, byval b as LongInt, byref outMs as LongInt) as Boolean
-  return TryRoundHalfUpDoubleToLongInt(CDbl(a) - CDbl(b), outMs)
+private function TrySubTimeMsChecked(byval a as SmInt, byval b as SmInt, byref outMs as SmInt) as Boolean
+  return TryRoundHalfUpFloatToSmInt(SmCFloat(a) - SmCFloat(b), outMs)
 end function
 
 private function ScalarHasRenderRational(byref sv as ScalarValue) as Boolean
@@ -1001,30 +1052,30 @@ private function ScalarHasImagRenderRational(byref sv as ScalarValue) as Boolean
   return (sv.flags and SVF_IMAG_RENDER_RATIONAL) <> 0
 end function
 
-private function ScalarExactInt64MetadataValid(byref sv as ScalarValue) as Boolean
-  return (sv.flags and SVF_EXACT_INT64_VALID) <> 0
+private function ScalarExactSmIntMetadataValid(byref sv as ScalarValue) as Boolean
+  return (sv.flags and SVF_EXACT_SMINT_VALID) <> 0
 end function
 
-private function ScalarExactUInt64MetadataValid(byref sv as ScalarValue) as Boolean
-  return (sv.flags and SVF_EXACT_UINT64_VALID) <> 0
+private function ScalarExactSmUIntMetadataValid(byref sv as ScalarValue) as Boolean
+  return (sv.flags and SVF_EXACT_SMUINT_VALID) <> 0
 end function
 
-private function ScalarImagExactInt64MetadataValid(byref sv as ScalarValue) as Boolean
-  return (sv.flags and SVF_IMAG_EXACT_INT64_VALID) <> 0
+private function ScalarImagExactSmIntMetadataValid(byref sv as ScalarValue) as Boolean
+  return (sv.flags and SVF_IMAG_EXACT_SMINT_VALID) <> 0
 end function
 
-private function ScalarImagExactUInt64MetadataValid(byref sv as ScalarValue) as Boolean
-  return (sv.flags and SVF_IMAG_EXACT_UINT64_VALID) <> 0
+private function ScalarImagExactSmUIntMetadataValid(byref sv as ScalarValue) as Boolean
+  return (sv.flags and SVF_IMAG_EXACT_SMUINT_VALID) <> 0
 end function
 
-private function ScalarImagExactInt64Valid(byref sv as ScalarValue) as Boolean
+private function ScalarImagExactSmIntValid(byref sv as ScalarValue) as Boolean
   if ScalarHasImagRenderRational(sv) then return FALSE
-  return ScalarImagExactInt64MetadataValid(sv)
+  return ScalarImagExactSmIntMetadataValid(sv)
 end function
 
-private function ScalarImagExactUInt64Valid(byref sv as ScalarValue) as Boolean
+private function ScalarImagExactSmUIntValid(byref sv as ScalarValue) as Boolean
   if ScalarHasImagRenderRational(sv) then return FALSE
-  return ScalarImagExactUInt64MetadataValid(sv)
+  return ScalarImagExactSmUIntMetadataValid(sv)
 end function
 
 private function ScalarHasNonzeroImaginaryPart(byref sv as ScalarValue) as Boolean
@@ -1033,7 +1084,7 @@ private function ScalarHasNonzeroImaginaryPart(byref sv as ScalarValue) as Boole
   if IsNaNValue(sv.imag) then return TRUE
   if IsInfValue(sv.imag) then return TRUE
   if sv.imag <> 0.0 then return TRUE
-  if ScalarImagExactInt64Valid(sv) andalso sv.imagExactInt64 <> 0 then return TRUE
+  if ScalarImagExactSmIntValid(sv) andalso sv.imagExactInt <> 0 then return TRUE
   return FALSE
 end function
 
@@ -1061,12 +1112,12 @@ end function
 declare function ApplyTimeBinaryScalars(byref leftS as ScalarValue, byref rightS as ScalarValue, byval op as UByte, byref outV as EvalValue) as Boolean
 declare function FormatComplexScalarValue(byref sv as ScalarValue) as String
 declare function ApplyUnaryComplexSupportScalars(byval fnId as Integer, byref scalarV as ScalarValue, byref outV as EvalValue) as Boolean
-declare function ApplyUnaryComplexTrigById(byval fnId as Integer, byval ar as Double, byval ai as Double, byref outR as Double, byref outI as Double) as Boolean
+declare function ApplyUnaryComplexTrigById(byval fnId as Integer, byval ar as SmFloat, byval ai as SmFloat, byref outR as SmFloat, byref outI as SmFloat) as Boolean
 declare function TryApplyUnaryComplexMathOverlay(byval fnId as Integer, byref scalarV as ScalarValue, byref outV as EvalValue) as Boolean
 declare function ApplyUnaryBuiltin(byval fnId as Integer, byref scalarV as ScalarValue, byref outV as EvalValue) as Boolean
 declare function TryApplyUnaryRealByKind(byval fnId as Integer, byref scalarV as ScalarValue, byref outV as EvalValue) as Boolean
 declare sub calcRoundingFn(byval fnId as Integer, byref scalarV as ScalarValue, byref outV as EvalValue)
-declare function TryApplyFactorialScalarInt(byval n as LongInt, byref outV as EvalValue) as Boolean
+declare function TryApplyFactorialScalarInt(byval n as SmInt, byref outV as EvalValue) as Boolean
 
 private function ExprStartPointsIntoRootInput() as Boolean
   if len(rootInputExpr) = 0 then return FALSE
@@ -1116,7 +1167,7 @@ private function StripErrorLocationSuffix(byref errFull as String) as String
 end function
 
 private sub SetParseErrorAtColumn(byref msg as String, byval col as Integer)
-  if parseError = 0 then parseError = 1
+  if parseError = FALSE then parseError = TRUE
   if lastErrorText <> "" then exit sub
   dim exprText as String = rootInputExpr
   if len(exprText) = 0 then exprText = ExprTextForErrorSnippet()
@@ -1169,12 +1220,12 @@ private sub RemapParseErrorToUnaryFuncColumn(byref keyArg as EvalValue)
   unaryLambdaEvalBodyErrorCol = 0
   if col <= 0 then exit sub
   lastErrorText = ""
-  parseError = 0
+  parseError = FALSE
   SetParseErrorAtColumn(msg, col)
 end sub
 
 private sub SetParseError(byref msg as String)
-  if parseError = 0 then parseError = 1
+  if parseError = FALSE then parseError = TRUE
   if lastErrorText = "" then
     dim isExpr as Boolean = (exprStart <> 0) andalso (pStream <> 0) andalso (pStream >= exprStart)
     if isExpr andalso ExprStartPointsIntoRootInput() then
@@ -1503,9 +1554,12 @@ end sub
 
 private function HashLowerIdent(byref s as String) as UInteger
   dim h as UInteger = 2166136261u
+  dim n as Integer = len(s)
+  if n = 0 then return h
+  dim p as UByte ptr = cast(UByte ptr, StrPtr(s))
   dim i as Integer
-  for i = 1 to len(s)
-    h xor= asc(mid(s, i, 1))
+  for i = 0 to n - 1
+    h xor= p[i]
     h *= 16777619u
   next i
   return h
@@ -1749,8 +1803,14 @@ private function IsReservedUserFunctionName(byref nameText as String) as Boolean
   return FALSE
 end function
 
+'' Case-insensitive test for the reserved name ``ans`` without allocating a lowercased copy (ASCII letters only).
+private function IsAnsNameText(byref s as String) as Boolean
+  if len(s) <> 3 then return FALSE
+  return ((s[0] or 32) = 97) andalso ((s[1] or 32) = 110) andalso ((s[2] or 32) = 115)
+end function
+
 private function IsReservedBuiltinVariableNameForUserFunction(byref nameText as String) as Boolean
-  return (lcase(nameText) = FB_STR_ANS)
+  return IsAnsNameText(nameText)
 end function
 
 private function IsTrailingFormatterFunctionName(byref nameText as String) as Boolean
@@ -1811,100 +1871,111 @@ private function TryRewriteTrailingFormatterStmt(byref stmt as String, byref rew
   return TRUE
 end function
 
-private const POW10_0 as ULongInt = 1ull
-private const POW10_1 as ULongInt = 10ull
-private const POW10_2 as ULongInt = 100ull
-private const POW10_3 as ULongInt = 1000ull
-private const POW10_4 as ULongInt = 10000ull
-private const POW10_5 as ULongInt = 100000ull
-private const POW10_6 as ULongInt = 1000000ull
-private const POW10_7 as ULongInt = 10000000ull
-private const POW10_8 as ULongInt = 100000000ull
-private const POW10_9 as ULongInt = 1000000000ull
-private const POW10_10 as ULongInt = 10000000000ull
-private const POW10_11 as ULongInt = 100000000000ull
-private const POW10_12 as ULongInt = 1000000000000ull
-private const POW10_13 as ULongInt = 10000000000000ull
-private const POW10_14 as ULongInt = 100000000000000ull
-private const POW10_15 as ULongInt = 1000000000000000ull
-private const POW10_16 as ULongInt = 10000000000000000ull
-private const POW10_17 as ULongInt = 100000000000000000ull
-private const POW10_18 as ULongInt = 1000000000000000000ull
-private const POW10_19 as ULongInt = 10000000000000000000ull
-
-private function Pow10U64(byval n as Integer) as ULongInt
-  select case n
-  case 0: return POW10_0
-  case 1: return POW10_1
-  case 2: return POW10_2
-  case 3: return POW10_3
-  case 4: return POW10_4
-  case 5: return POW10_5
-  case 6: return POW10_6
-  case 7: return POW10_7
-  case 8: return POW10_8
-  case 9: return POW10_9
-  case 10: return POW10_10
-  case 11: return POW10_11
-  case 12: return POW10_12
-  case 13: return POW10_13
-  case 14: return POW10_14
-  case 15: return POW10_15
-  case 16: return POW10_16
-  case 17: return POW10_17
-  case 18: return POW10_18
-  case 19: return POW10_19
-  case else: return POW10_0
-  end select
+'' 10^n as SmUInt. Precondition: 0 <= n < SM_POW10_SMUINT_COUNT (checked by assert in debug builds; any other n gives 1,
+'' where C++ pow10SmUInt asserts). Table built once by exact multiplication.
+private function Pow10SmUInt(byval n as Integer) as SmUInt
+  assert(n >= 0 andalso n < SM_POW10_SMUINT_COUNT)
+  static pow10Tab(0 to SM_POW10_SMUINT_COUNT - 1) as SmUInt
+  static ready as Boolean = FALSE
+  if ready = FALSE then
+    dim i as Integer
+    pow10Tab(0) = 1
+    for i = 1 to SM_POW10_SMUINT_COUNT - 1
+      pow10Tab(i) = pow10Tab(i - 1) * 10
+    next i
+    ready = TRUE
+  end if
+  if n < 0 orelse n >= SM_POW10_SMUINT_COUNT then return 1
+  return pow10Tab(n)
 end function
 
-private function TryAddULongChecked(byval a as ULongInt, byval b as ULongInt, byref outV as ULongInt) as Boolean
-  if a > (FB_U64_MAX - b) then return FALSE
+'' Largest n whose factorial fits SmInt (20 for 64 bits).
+private function FactorialMaxArg() as Integer
+  static limit as Integer = -1
+  if limit < 0 then
+    dim f as SmInt = 1
+    dim n as Integer = 0
+    while f <= SM_INT_MAX \ (n + 1)
+      n += 1
+      f *= n
+    wend
+    limit = n
+  end if
+  return limit
+end function
+
+'' n! as SmInt. Precondition: 0 <= n <= FactorialMaxArg() (checked by assert in debug builds; callers range-check first,
+'' like C++ factorialInt).
+private function FactorialInt(byval n as Integer) as SmInt
+  assert(n >= 0 andalso n <= FactorialMaxArg())
+  static factTab() as SmInt
+  static ready as Boolean = FALSE
+  if ready = FALSE then
+    dim top as Integer = FactorialMaxArg()
+    dim i as Integer
+    redim factTab(0 to top)
+    factTab(0) = 1
+    for i = 1 to top
+      factTab(i) = factTab(i - 1) * i
+    next i
+    ready = TRUE
+  end if
+  return factTab(n)
+end function
+
+'' mag < 2^mantissa: the integer magnitude is exactly representable as SmFloat.
+private function IsMagBelowExactFloatLimit(byval mag as SmUInt) as Boolean
+  if SM_EXACT_LIMIT_COVERS_SMUINT then return TRUE
+  return mag < SM_EXACT_LIMIT_MAG
+end function
+
+private function TryAddSmUIntChecked(byval a as SmUInt, byval b as SmUInt, byref outV as SmUInt) as Boolean
+  if a > (SM_UINT_MAX - b) then return FALSE
   outV = a + b
   return TRUE
 end function
 
-private function TryMulULongChecked(byval a as ULongInt, byval b as ULongInt, byref outV as ULongInt) as Boolean
-  if b <> 0ull andalso a > (FB_U64_MAX \ b) then return FALSE
+private function TryMulSmUIntChecked(byval a as SmUInt, byval b as SmUInt, byref outV as SmUInt) as Boolean
+  if b <> SmCUInt(0) andalso a > (SM_UINT_MAX \ b) then return FALSE
   outV = a * b
   return TRUE
 end function
 
-private function TryMult10_N_TimesImpl(byval x as ULongInt, byval N as Integer, byref outV as ULongInt) as Boolean
+private function TryMult10_N_TimesImpl(byval x as SmUInt, byval N as Integer, byref outV as SmUInt) as Boolean
   outV = x
   if N <= 0 then return TRUE
 
-  while N >= 19
-    if TryMulULongChecked(outV, Pow10U64(19), outV) = FALSE then return FALSE
-    N -= 19
+  while N >= SM_POW10_SMUINT_COUNT - 1
+    if TryMulSmUIntChecked(outV, Pow10SmUInt(SM_POW10_SMUINT_COUNT - 1), outV) = FALSE then return FALSE
+    N -= SM_POW10_SMUINT_COUNT - 1
   wend
 
   if N > 0 then
-    dim m as ULongInt = Pow10U64(N)
-    if TryMulULongChecked(outV, m, outV) = FALSE then return FALSE
+    dim m as SmUInt = Pow10SmUInt(N)
+    if TryMulSmUIntChecked(outV, m, outV) = FALSE then return FALSE
   end if
 
   return TRUE
 end function
 
-private function quickMult10(byval x as ULongInt) as ULongInt
+private function quickMult10(byval x as SmUInt) as SmUInt
   ' x*10 = x*(8+2) = x*8 + x*2 = (x<<3) + (x<<1)
   return (x shl 3) + (x shl 1)
 end function
 
-private function TryMult10OnceChecked(byval x as ULongInt, byref outV as ULongInt) as Boolean
-  if x > (FB_U64_MAX \ 10ull) then return FALSE
+private function TryMult10OnceChecked(byval x as SmUInt, byref outV as SmUInt) as Boolean
+  if x > (SM_UINT_MAX \ SmCUInt(10)) then return FALSE
   outV = quickMult10(x)
   return TRUE
 end function
 
 '' sin/cos/tan use MinGW libc for |theta| < 2^53; at 2^53 and above, results are rejected.
-private function IsTrigRadiansInRange(byval radians as Double) as Boolean
+private function IsTrigRadiansInRange(byval radians as SmFloat) as Boolean
   if IsNaNValue(radians) orelse IsInfValue(radians) then return FALSE
-  return abs(radians) < FB_MAX_EXACT_INT_FROM_DOUBLE
+  return abs(radians) < SM_MAX_EXACT_INT_FROM_FLOAT
 end function
 
-private function IsTrigCartesianInRange(byval ar as Double, byval ai as Double) as Boolean
+private function IsTrigCartesianInRange(byval ar as SmFloat, byval ai as SmFloat) as Boolean
   return IsTrigRadiansInRange(ar) andalso IsTrigRadiansInRange(ai)
 end function
 
@@ -1915,179 +1986,179 @@ end function
 
 private sub ScalarClearImag(byref sv as ScalarValue)
   sv.imag = 0.0
-  sv.imagExactInt64 = 0
-  sv.imagExactUInt64 = 0
-  sv.flags and= not (SVF_IMAG_EXACT_INT64_VALID or SVF_IMAG_EXACT_UINT64_VALID)
+  sv.imagExactInt = 0
+  sv.imagExactUInt = 0
+  sv.flags and= not (SVF_IMAG_EXACT_SMINT_VALID or SVF_IMAG_EXACT_SMUINT_VALID)
 end sub
 
-private sub ScalarSetImagExactInt64Valid(byref sv as ScalarValue, byval v as Boolean)
+private sub ScalarSetImagExactSmIntValid(byref sv as ScalarValue, byval v as Boolean)
   if v then
-    sv.flags or= SVF_IMAG_EXACT_INT64_VALID
+    sv.flags or= SVF_IMAG_EXACT_SMINT_VALID
   else
-    sv.flags and= not CUInt(SVF_IMAG_EXACT_INT64_VALID)
+    sv.flags and= not CUInt(SVF_IMAG_EXACT_SMINT_VALID)
   end if
 end sub
 
-private sub ScalarSetImagExactUInt64Valid(byref sv as ScalarValue, byval v as Boolean)
+private sub ScalarSetImagExactSmUIntValid(byref sv as ScalarValue, byval v as Boolean)
   if v then
-    sv.flags or= SVF_IMAG_EXACT_UINT64_VALID
+    sv.flags or= SVF_IMAG_EXACT_SMUINT_VALID
   else
-    sv.flags and= not CUInt(SVF_IMAG_EXACT_UINT64_VALID)
+    sv.flags and= not CUInt(SVF_IMAG_EXACT_SMUINT_VALID)
   end if
 end sub
 
-private function ScalarNumericReal(byref sv as ScalarValue) as Double
+private function ScalarNumericReal(byref sv as ScalarValue) as SmFloat
   ScalarRepairExactMetadata(sv)
   if ScalarHasRenderRational(sv) then
     if IsNaNValue(sv.scalar) orelse IsInfValue(sv.scalar) orelse sv.scalar <> 0.0 then return sv.scalar
-    if sv.exactUInt64 = 0 then return sv.scalar
-    return CDbl(sv.exactInt64) / CDbl(sv.exactUInt64)
+    if sv.exactUInt = 0 then return sv.scalar
+    return SmCFloat(sv.exactInt) / SmCFloat(sv.exactUInt)
   end if
-  if ScalarExactInt64Valid(sv) then
-    if sv.exactInt64 = FB_I64_MIN then return FB_I64_MIN_D
-    return CDbl(sv.exactInt64)
+  if ScalarExactSmIntValid(sv) then
+    if sv.exactInt = SM_INT_MIN then return SM_FLOAT_SMINT_MIN
+    return SmCFloat(sv.exactInt)
   end if
-  if sv.scalarStorageKind = SSK_INT64 then
-    if sv.exactInt64 = FB_I64_MIN then return FB_I64_MIN_D
-    return CDbl(sv.exactInt64)
+  if sv.scalarStorageKind = SSK_SMINT then
+    if sv.exactInt = SM_INT_MIN then return SM_FLOAT_SMINT_MIN
+    return SmCFloat(sv.exactInt)
   end if
-  if ScalarExactUInt64Valid(sv) then return CDbl(sv.exactUInt64)
-  if sv.scalarStorageKind = SSK_UINT64 then return CDbl(sv.exactUInt64)
+  if ScalarExactSmUIntValid(sv) then return SmCFloat(sv.exactUInt)
+  if sv.scalarStorageKind = SSK_SMUINT then return SmCFloat(sv.exactUInt)
   return sv.scalar
 end function
 
-private function ScalarNumericImag(byref sv as ScalarValue) as Double
+private function ScalarNumericImag(byref sv as ScalarValue) as SmFloat
   ScalarRepairExactMetadata(sv)
   if ScalarHasImagRenderRational(sv) then
     if IsNaNValue(sv.imag) orelse IsInfValue(sv.imag) orelse sv.imag <> 0.0 then return sv.imag
-    if sv.imagExactUInt64 = 0 then return sv.imag
-    return CDbl(sv.imagExactInt64) / CDbl(sv.imagExactUInt64)
+    if sv.imagExactUInt = 0 then return sv.imag
+    return SmCFloat(sv.imagExactInt) / SmCFloat(sv.imagExactUInt)
   end if
-  if ScalarImagExactInt64Valid(sv) orelse ScalarImagExactUInt64Valid(sv) then
+  if ScalarImagExactSmIntValid(sv) orelse ScalarImagExactSmUIntValid(sv) then
     if ScalarImagExactMetadataMatchesFloat(sv) = FALSE then return sv.imag
   end if
-  if ScalarImagExactInt64Valid(sv) then
-    return CDbl(sv.imagExactInt64)
+  if ScalarImagExactSmIntValid(sv) then
+    return SmCFloat(sv.imagExactInt)
   end if
-  if ScalarImagExactUInt64Valid(sv) then
-    return CDbl(sv.imagExactUInt64)
+  if ScalarImagExactSmUIntValid(sv) then
+    return SmCFloat(sv.imagExactUInt)
   end if
   return sv.imag
 end function
 
-'' Exact int64 for arithmetic/metadata (not render-rational numerator storage).
-function ScalarExactInt64Valid(byref sv as ScalarValue) as Boolean
+'' Exact SmInt for arithmetic/metadata (not render-rational numerator storage).
+function ScalarExactSmIntValid(byref sv as ScalarValue) as Boolean
   if ScalarHasRenderRational(sv) then return FALSE
-  return ScalarExactInt64MetadataValid(sv)
+  return ScalarExactSmIntMetadataValid(sv)
 end function
 
-sub ScalarSetExactInt64Valid(byref sv as ScalarValue, byval v as Boolean)
+sub ScalarSetExactSmIntValid(byref sv as ScalarValue, byval v as Boolean)
   if v then
-    sv.flags or= SVF_EXACT_INT64_VALID
+    sv.flags or= SVF_EXACT_SMINT_VALID
   else
-    sv.flags and= not CUInt(SVF_EXACT_INT64_VALID)
+    sv.flags and= not CUInt(SVF_EXACT_SMINT_VALID)
   end if
 end sub
 
-function ScalarExactUInt64Valid(byref sv as ScalarValue) as Boolean
+function ScalarExactSmUIntValid(byref sv as ScalarValue) as Boolean
   if ScalarHasRenderRational(sv) then return FALSE
-  return ScalarExactUInt64MetadataValid(sv)
+  return ScalarExactSmUIntMetadataValid(sv)
 end function
 
-sub ScalarSetExactUInt64Valid(byref sv as ScalarValue, byval v as Boolean)
+sub ScalarSetExactSmUIntValid(byref sv as ScalarValue, byval v as Boolean)
   if v then
-    sv.flags or= SVF_EXACT_UINT64_VALID
+    sv.flags or= SVF_EXACT_SMUINT_VALID
   else
-    sv.flags and= not CUInt(SVF_EXACT_UINT64_VALID)
+    sv.flags and= not CUInt(SVF_EXACT_SMUINT_VALID)
   end if
 end sub
 
-private sub ScalarSyncExactInt64WithUIntMirror(byref sv as ScalarValue, byval n as LongInt)
-  ScalarSetExactInt64Valid(sv, TRUE)
-  sv.exactInt64 = n
+private sub ScalarSyncExactSmIntWithSmUIntMirror(byref sv as ScalarValue, byval n as SmInt)
+  ScalarSetExactSmIntValid(sv, TRUE)
+  sv.exactInt = n
   if n >= 0 then
-    ScalarSetExactUInt64Valid(sv, TRUE)
-    sv.exactUInt64 = CULngInt(n)
+    ScalarSetExactSmUIntValid(sv, TRUE)
+    sv.exactUInt = SmCUInt(n)
   else
-    ScalarSetExactUInt64Valid(sv, FALSE)
-    sv.exactUInt64 = 0
+    ScalarSetExactSmUIntValid(sv, FALSE)
+    sv.exactUInt = 0
   end if
 end sub
 
-private sub ScalarSyncExactUInt64WithIntMirror(byref sv as ScalarValue, byval n as ULongInt)
-  ScalarSetExactUInt64Valid(sv, TRUE)
-  sv.exactUInt64 = n
-  if n <= FB_I64_MAX_U then
-    ScalarSetExactInt64Valid(sv, TRUE)
-    sv.exactInt64 = CLngInt(n)
+private sub ScalarSyncExactSmUIntWithIntMirror(byref sv as ScalarValue, byval n as SmUInt)
+  ScalarSetExactSmUIntValid(sv, TRUE)
+  sv.exactUInt = n
+  if n <= SM_INT_MAX_U then
+    ScalarSetExactSmIntValid(sv, TRUE)
+    sv.exactInt = SmCInt(n)
   else
-    ScalarSetExactInt64Valid(sv, FALSE)
-    sv.exactInt64 = 0
+    ScalarSetExactSmIntValid(sv, FALSE)
+    sv.exactInt = 0
   end if
 end sub
 
-private sub ScalarSyncImagExactInt64WithUIntMirror(byref sv as ScalarValue, byval n as LongInt)
-  ScalarSetImagExactInt64Valid(sv, TRUE)
-  sv.imagExactInt64 = n
+private sub ScalarSyncImagExactSmIntWithSmUIntMirror(byref sv as ScalarValue, byval n as SmInt)
+  ScalarSetImagExactSmIntValid(sv, TRUE)
+  sv.imagExactInt = n
   if n >= 0 then
-    ScalarSetImagExactUInt64Valid(sv, TRUE)
-    sv.imagExactUInt64 = CULngInt(n)
+    ScalarSetImagExactSmUIntValid(sv, TRUE)
+    sv.imagExactUInt = SmCUInt(n)
   else
-    ScalarSetImagExactUInt64Valid(sv, FALSE)
-    sv.imagExactUInt64 = 0
+    ScalarSetImagExactSmUIntValid(sv, FALSE)
+    sv.imagExactUInt = 0
   end if
 end sub
 
 '' Keep SVF_* flags aligned with scalarStorageKind and exact* fields (stale flags break exact complex ops).
 sub ScalarRepairExactMetadata(byref sv as ScalarValue)
   select case sv.scalarStorageKind
-  case SSK_INT64
-    ScalarSetExactInt64Valid(sv, TRUE)
-    if sv.exactInt64 >= 0 then
-      ScalarSetExactUInt64Valid(sv, TRUE)
-      sv.exactUInt64 = CULngInt(sv.exactInt64)
-    elseif sv.exactUInt64 <> 0 then
-      ScalarSetExactUInt64Valid(sv, TRUE)
+  case SSK_SMINT
+    ScalarSetExactSmIntValid(sv, TRUE)
+    if sv.exactInt >= 0 then
+      ScalarSetExactSmUIntValid(sv, TRUE)
+      sv.exactUInt = SmCUInt(sv.exactInt)
+    elseif sv.exactUInt <> 0 then
+      ScalarSetExactSmUIntValid(sv, TRUE)
     else
-      ScalarSetExactUInt64Valid(sv, FALSE)
-      sv.exactUInt64 = 0
+      ScalarSetExactSmUIntValid(sv, FALSE)
+      sv.exactUInt = 0
     end if
-  case SSK_UINT64
-    ScalarSetExactUInt64Valid(sv, TRUE)
-    if sv.exactUInt64 <= FB_I64_MAX_U then
-      ScalarSetExactInt64Valid(sv, TRUE)
-      sv.exactInt64 = CLngInt(sv.exactUInt64)
+  case SSK_SMUINT
+    ScalarSetExactSmUIntValid(sv, TRUE)
+    if sv.exactUInt <= SM_INT_MAX_U then
+      ScalarSetExactSmIntValid(sv, TRUE)
+      sv.exactInt = SmCInt(sv.exactUInt)
     else
-      ScalarSetExactInt64Valid(sv, FALSE)
-      sv.exactInt64 = 0
+      ScalarSetExactSmIntValid(sv, FALSE)
+      sv.exactInt = 0
     end if
   case else
-    '' Rationals keep num/den in exactInt64/exactUInt64 with SVF_RENDER_RATIONAL (not SSK_INT64).
+    '' Rationals keep num/den in exactInt/exactUInt with SVF_RENDER_RATIONAL (not SSK_SMINT).
     if (sv.flags and SVF_RENDER_RATIONAL) <> 0 then
-      ScalarSetExactInt64Valid(sv, TRUE)
-      ScalarSetExactUInt64Valid(sv, TRUE)
+      ScalarSetExactSmIntValid(sv, TRUE)
+      ScalarSetExactSmUIntValid(sv, TRUE)
     else
-      ScalarSetExactInt64Valid(sv, FALSE)
-      ScalarSetExactUInt64Valid(sv, FALSE)
+      ScalarSetExactSmIntValid(sv, FALSE)
+      ScalarSetExactSmUIntValid(sv, FALSE)
     end if
   end select
-  '' INT_POWER stores base in imagExactInt64 and exponent in imagExactUInt64; do not remap imag fields.
+  '' INT_POWER stores base in imagExactInt and exponent in imagExactUInt; do not remap imag fields.
   if (sv.flags and SVF_RENDER_INT_POWER) = 0 then
-    dim tIm as LongInt
-    if ScalarImagExactInt64Valid(sv) = FALSE andalso sv.imagExactInt64 <> 0 then
-      if TryGetExactInt64FromDouble(sv.imag, tIm) andalso tIm = sv.imagExactInt64 then
-        ScalarSetImagExactInt64Valid(sv, TRUE)
-        if sv.imagExactInt64 >= 0 then
-          ScalarSetImagExactUInt64Valid(sv, TRUE)
-          sv.imagExactUInt64 = CULngInt(sv.imagExactInt64)
+    dim tIm as SmInt
+    if ScalarImagExactSmIntValid(sv) = FALSE andalso sv.imagExactInt <> 0 then
+      if TryGetExactSmIntFromFloat(sv.imag, tIm) andalso tIm = sv.imagExactInt then
+        ScalarSetImagExactSmIntValid(sv, TRUE)
+        if sv.imagExactInt >= 0 then
+          ScalarSetImagExactSmUIntValid(sv, TRUE)
+          sv.imagExactUInt = SmCUInt(sv.imagExactInt)
         end if
       end if
-    elseif ScalarImagExactUInt64Valid(sv) = FALSE andalso sv.imagExactUInt64 <> 0 then
-      if TryGetExactInt64FromDouble(sv.imag, tIm) andalso CULngInt(tIm) = sv.imagExactUInt64 then
-        ScalarSetImagExactUInt64Valid(sv, TRUE)
-        if sv.imagExactUInt64 <= FB_I64_MAX_U then
-          ScalarSetImagExactInt64Valid(sv, TRUE)
-          sv.imagExactInt64 = CLngInt(sv.imagExactUInt64)
+    elseif ScalarImagExactSmUIntValid(sv) = FALSE andalso sv.imagExactUInt <> 0 then
+      if TryGetExactSmIntFromFloat(sv.imag, tIm) andalso SmCUInt(tIm) = sv.imagExactUInt then
+        ScalarSetImagExactSmUIntValid(sv, TRUE)
+        if sv.imagExactUInt <= SM_INT_MAX_U then
+          ScalarSetImagExactSmIntValid(sv, TRUE)
+          sv.imagExactInt = SmCInt(sv.imagExactUInt)
         end if
       end if
     end if
@@ -2100,7 +2171,7 @@ private sub ScalarNormalizeIfPureReal(byref sv as ScalarValue)
   end if
 end sub
 
-private sub ScalarLoadCartesian(byref sv as ScalarValue, byref ar as Double, byref ai as Double)
+private sub ScalarLoadCartesian(byref sv as ScalarValue, byref ar as SmFloat, byref ai as SmFloat)
   ar = ScalarNumericReal(sv)
   ai = ScalarNumericImag(sv)
 end sub
@@ -2112,21 +2183,21 @@ private sub ValueClearLambdaPayload(byref v as EvalValue)
   v.unaryFuncBodyErrorCol = 0
 end sub
 
-private sub ValueSetScalar(byref v as EvalValue, byval n as Double)
+private sub ValueSetScalar(byref v as EvalValue, byval n as SmFloat)
   ValueClearLambdaPayload(v)
   v.funcRefName = ""
   v.kind = VK_SCALAR
-  v.scalarValue.scalarStorageKind = SSK_FLOATINGPOINT
+  v.scalarValue.scalarStorageKind = SSK_SMFLOATINGPOINT
   v.scalarValue.flags and= not CUInt(SVF_RENDER_RATIONAL or SVF_IMAG_RENDER_RATIONAL or SVF_RENDER_INT_POWER)
   v.scalarValue.scalar = n
   ScalarClearImag(v.scalarValue)
   v.expandArgs = FALSE
   v.renderBase = 0
   v.renderUnsigned = FALSE
-  ScalarSetExactInt64Valid(v.scalarValue, FALSE)
-  v.scalarValue.exactInt64 = 0
-  ScalarSetExactUInt64Valid(v.scalarValue, FALSE)
-  v.scalarValue.exactUInt64 = 0
+  ScalarSetExactSmIntValid(v.scalarValue, FALSE)
+  v.scalarValue.exactInt = 0
+  ScalarSetExactSmUIntValid(v.scalarValue, FALSE)
+  v.scalarValue.exactUInt = 0
   erase v.arr
 end sub
 
@@ -2134,11 +2205,11 @@ private function ScalarValueFromEvalScalar(byref v as EvalValue) as ScalarValue
   dim outV as ScalarValue
   outV.scalarStorageKind = v.scalarStorageKind
   outV.scalar = v.scalar
-  outV.exactInt64 = v.exactInt64
-  outV.exactUInt64 = v.exactUInt64
+  outV.exactInt = v.exactInt
+  outV.exactUInt = v.exactUInt
   outV.imag = v.scalarValue.imag
-  outV.imagExactInt64 = v.scalarValue.imagExactInt64
-  outV.imagExactUInt64 = v.scalarValue.imagExactUInt64
+  outV.imagExactInt = v.scalarValue.imagExactInt
+  outV.imagExactUInt = v.scalarValue.imagExactUInt
   outV.flags = v.scalarValue.flags
   return outV
 end function
@@ -2146,14 +2217,14 @@ end function
 private sub EvalScalarFromScalarValue(byref s as ScalarValue, byref outV as EvalValue)
   ValueSetScalar(outV, s.scalar)
   outV.scalarStorageKind = s.scalarStorageKind
-  outV.scalarValue.exactInt64 = s.exactInt64
-  outV.scalarValue.exactUInt64 = s.exactUInt64
-  outV.scalarValue.flags = (outV.scalarValue.flags and not (SVF_EXACT_INT64_VALID or SVF_EXACT_UINT64_VALID)) or (s.flags and (SVF_EXACT_INT64_VALID or SVF_EXACT_UINT64_VALID))
+  outV.scalarValue.exactInt = s.exactInt
+  outV.scalarValue.exactUInt = s.exactUInt
+  outV.scalarValue.flags = (outV.scalarValue.flags and not (SVF_EXACT_SMINT_VALID or SVF_EXACT_SMUINT_VALID)) or (s.flags and (SVF_EXACT_SMINT_VALID or SVF_EXACT_SMUINT_VALID))
   outV.scalarValue.imag = s.imag
-  outV.scalarValue.imagExactInt64 = s.imagExactInt64
-  outV.scalarValue.imagExactUInt64 = s.imagExactUInt64
-  dim extraFlags as UInteger = s.flags and (SVF_IMAG_EXACT_INT64_VALID or SVF_IMAG_EXACT_UINT64_VALID or SVF_DEC_SCI_POW63_HIGH or SVF_RENDER_RATIONAL or SVF_IMAG_RENDER_RATIONAL or SVF_RENDER_INT_POWER)
-  outV.scalarValue.flags = (outV.scalarValue.flags and not (SVF_IMAG_EXACT_INT64_VALID or SVF_IMAG_EXACT_UINT64_VALID or SVF_DEC_SCI_POW63_HIGH or SVF_RENDER_RATIONAL or SVF_IMAG_RENDER_RATIONAL or SVF_RENDER_INT_POWER)) or extraFlags
+  outV.scalarValue.imagExactInt = s.imagExactInt
+  outV.scalarValue.imagExactUInt = s.imagExactUInt
+  dim extraFlags as UInteger = s.flags and (SVF_IMAG_EXACT_SMINT_VALID or SVF_IMAG_EXACT_SMUINT_VALID or SVF_DEC_SCI_POW63_HIGH or SVF_RENDER_RATIONAL or SVF_IMAG_RENDER_RATIONAL or SVF_RENDER_INT_POWER)
+  outV.scalarValue.flags = (outV.scalarValue.flags and not (SVF_IMAG_EXACT_SMINT_VALID or SVF_IMAG_EXACT_SMUINT_VALID or SVF_DEC_SCI_POW63_HIGH or SVF_RENDER_RATIONAL or SVF_IMAG_RENDER_RATIONAL or SVF_RENDER_INT_POWER)) or extraFlags
   ScalarRepairExactMetadata(outV.scalarValue)
 end sub
 
@@ -2179,314 +2250,329 @@ private function ValueArrayLen(byref v as EvalValue) as Integer
   return ubound(v.arr) - lbound(v.arr) + 1
 end function
 
-private sub ValueSetInt64(byref v as EvalValue, byval n as LongInt)
-  if n = FB_I64_MIN then
-    ValueSetScalar(v, FB_I64_MIN_D)
+private sub ValueSetSmInt(byref v as EvalValue, byval n as SmInt)
+  if n = SM_INT_MIN then
+    ValueSetScalar(v, SM_FLOAT_SMINT_MIN)
   else
-    ValueSetScalar(v, CDbl(n))
+    ValueSetScalar(v, SmCFloat(n))
   end if
-  v.scalarValue.scalarStorageKind = SSK_INT64
-  ScalarSyncExactInt64WithUIntMirror(v.scalarValue, n)
+  v.scalarValue.scalarStorageKind = SSK_SMINT
+  ScalarSyncExactSmIntWithSmUIntMirror(v.scalarValue, n)
   ScalarRepairExactMetadata(v.scalarValue)
 end sub
 
-private sub ValueSetUInt64(byref v as EvalValue, byval n as ULongInt)
-  ValueSetScalar(v, CDbl(n))
-  v.scalarValue.scalarStorageKind = SSK_UINT64
-  ScalarSyncExactUInt64WithIntMirror(v.scalarValue, n)
+private sub ValueSetSmUInt(byref v as EvalValue, byval n as SmUInt)
+  ValueSetScalar(v, SmCFloat(n))
+  v.scalarValue.scalarStorageKind = SSK_SMUINT
+  ScalarSyncExactSmUIntWithIntMirror(v.scalarValue, n)
   ScalarRepairExactMetadata(v.scalarValue)
 end sub
 
-private sub ValueSetUInt64PreferInt64(byref v as EvalValue, byval n as ULongInt)
-  if n <= FB_I64_MAX_U then
-    ValueSetInt64(v, CLngInt(n))
+private sub ValueSetSmUIntPreferSmInt(byref v as EvalValue, byval n as SmUInt)
+  if n <= SM_INT_MAX_U then
+    ValueSetSmInt(v, SmCInt(n))
   else
-    ValueSetUInt64(v, n)
+    ValueSetSmUInt(v, n)
   end if
 end sub
 
-function TryGetExactInt64FromDouble(byval n as Double, byref outV as LongInt) as Boolean
+function TryGetExactSmIntFromFloat(byval n as SmFloat, byref outV as SmInt) as Boolean
   if IsNonFiniteValue(n) then return FALSE
-  if n < -FB_MAX_EXACT_INT_FROM_DOUBLE orelse n > FB_MAX_EXACT_INT_FROM_DOUBLE then return FALSE
-  if n < FB_I64_MIN_D orelse n > FB_I64_MAX_D then return FALSE
-  dim t as LongInt = CLngInt(n)
-  if n <> CDbl(t) then return FALSE
+  if n < -SM_MAX_EXACT_INT_FROM_FLOAT orelse n > SM_MAX_EXACT_INT_FROM_FLOAT then return FALSE
+  if n < SM_FLOAT_SMINT_MIN orelse n >= SM_FLOAT_SMINT_BOUND then return FALSE
+  dim t as SmInt = SmCInt(n)
+  if n <> SmCFloat(t) then return FALSE
   outV = t
   return TRUE
 end function
 
 '' Same restore as C++ makeScalarMaybeExact: an exact integer double within 2^53 keeps int metadata.
-private sub ValueSetScalarMaybeExact(byref v as EvalValue, byval n as Double)
-  dim asInt as LongInt
-  if TryGetExactInt64FromDouble(n, asInt) then
-    ValueSetInt64(v, asInt)
+private sub ValueSetScalarMaybeExact(byref v as EvalValue, byval n as SmFloat)
+  dim asInt as SmInt
+  if TryGetExactSmIntFromFloat(n, asInt) then
+    ValueSetSmInt(v, asInt)
   else
     ValueSetScalar(v, n)
   end if
 end sub
 
-'' True when imag exact metadata matches the stored float imag (guards stale imagExactInt64).
+'' True when imag exact metadata matches the stored float imag (guards stale imagExactInt).
 private function ScalarImagExactMetadataMatchesFloat(byref sv as ScalarValue) as Boolean
-  dim t as LongInt
-  if TryGetExactInt64FromDouble(sv.imag, t) = FALSE then return FALSE
-  if ScalarImagExactInt64MetadataValid(sv) andalso t = sv.imagExactInt64 then return TRUE
-  if ScalarImagExactUInt64MetadataValid(sv) andalso CULngInt(t) = sv.imagExactUInt64 then return TRUE
+  dim t as SmInt
+  if TryGetExactSmIntFromFloat(sv.imag, t) = FALSE then return FALSE
+  if ScalarImagExactSmIntMetadataValid(sv) andalso t = sv.imagExactInt then return TRUE
+  if ScalarImagExactSmUIntMetadataValid(sv) andalso SmCUInt(t) = sv.imagExactUInt then return TRUE
   return FALSE
 end function
 
-private sub ValueSetScalarComplexFromDoubles(byref v as EvalValue, byval re as Double, byval im as Double)
+private sub ValueSetScalarComplexFromFloats(byref v as EvalValue, byval re as SmFloat, byval im as SmFloat)
   if IsNaNValue(re) andalso IsNaNValue(im) then
     ValueSetScalar(v, MakeNaN())
     exit sub
   end if
   v.kind = VK_SCALAR
-  v.scalarValue.scalarStorageKind = SSK_FLOATINGPOINT
+  v.scalarValue.scalarStorageKind = SSK_SMFLOATINGPOINT
   v.scalarValue.flags and= not CUInt(SVF_RENDER_RATIONAL or SVF_IMAG_RENDER_RATIONAL or SVF_RENDER_INT_POWER)
   v.scalarValue.scalar = re
-  ScalarSetExactInt64Valid(v.scalarValue, FALSE)
-  v.scalarValue.exactInt64 = 0
-  ScalarSetExactUInt64Valid(v.scalarValue, FALSE)
-  v.scalarValue.exactUInt64 = 0
+  ScalarSetExactSmIntValid(v.scalarValue, FALSE)
+  v.scalarValue.exactInt = 0
+  ScalarSetExactSmUIntValid(v.scalarValue, FALSE)
+  v.scalarValue.exactUInt = 0
   v.scalarValue.imag = im
-  ScalarSetImagExactInt64Valid(v.scalarValue, FALSE)
-  ScalarSetImagExactUInt64Valid(v.scalarValue, FALSE)
-  v.scalarValue.imagExactInt64 = 0
-  v.scalarValue.imagExactUInt64 = 0
+  ScalarSetImagExactSmIntValid(v.scalarValue, FALSE)
+  ScalarSetImagExactSmUIntValid(v.scalarValue, FALSE)
+  v.scalarValue.imagExactInt = 0
+  v.scalarValue.imagExactUInt = 0
   v.expandArgs = FALSE
   v.renderBase = 0
   v.renderUnsigned = FALSE
   erase v.arr
-  dim tri as LongInt, tii as LongInt
-  if TryGetExactInt64FromDouble(re, tri) then
-    v.scalarValue.scalarStorageKind = SSK_INT64
-    ScalarSyncExactInt64WithUIntMirror(v.scalarValue, tri)
+  dim tri as SmInt, tii as SmInt
+  if TryGetExactSmIntFromFloat(re, tri) then
+    v.scalarValue.scalarStorageKind = SSK_SMINT
+    ScalarSyncExactSmIntWithSmUIntMirror(v.scalarValue, tri)
   end if
-  if TryGetExactInt64FromDouble(im, tii) then
-    ScalarSyncImagExactInt64WithUIntMirror(v.scalarValue, tii)
+  if TryGetExactSmIntFromFloat(im, tii) then
+    ScalarSyncImagExactSmIntWithSmUIntMirror(v.scalarValue, tii)
   end if
   ScalarNormalizeIfPureReal(v.scalarValue)
 end sub
 
 private sub ValueSetImagUnit(byref v as EvalValue)
-  ValueSetScalarComplexFromDoubles(v, 0.0, 1.0)
-  v.scalarValue.scalarStorageKind = SSK_INT64
-  ScalarSetExactInt64Valid(v.scalarValue, TRUE)
-  v.scalarValue.exactInt64 = 0
-  ScalarSetExactUInt64Valid(v.scalarValue, TRUE)
-  v.scalarValue.exactUInt64 = 0
-  ScalarSetImagExactInt64Valid(v.scalarValue, TRUE)
-  v.scalarValue.imagExactInt64 = 1
-  ScalarSetImagExactUInt64Valid(v.scalarValue, TRUE)
-  v.scalarValue.imagExactUInt64 = 1
+  ValueSetScalarComplexFromFloats(v, 0.0, 1.0)
+  v.scalarValue.scalarStorageKind = SSK_SMINT
+  ScalarSetExactSmIntValid(v.scalarValue, TRUE)
+  v.scalarValue.exactInt = 0
+  ScalarSetExactSmUIntValid(v.scalarValue, TRUE)
+  v.scalarValue.exactUInt = 0
+  ScalarSetImagExactSmIntValid(v.scalarValue, TRUE)
+  v.scalarValue.imagExactInt = 1
+  ScalarSetImagExactSmUIntValid(v.scalarValue, TRUE)
+  v.scalarValue.imagExactUInt = 1
   v.scalarValue.scalar = 0.0
   v.scalarValue.imag = 1.0
 end sub
 
-private function TryGetExactInt64(byref v as EvalValue, byref outV as LongInt) as Boolean
+private function TryGetExactSmInt(byref v as EvalValue, byref outV as SmInt) as Boolean
   if v.kind <> VK_SCALAR then return FALSE
-  if v.exactInt64Valid then
-    outV = v.exactInt64
+  if v.exactIntValid then
+    outV = v.exactInt
     return TRUE
   end if
-  if v.exactUInt64Valid then
-    outV = CLngInt(v.exactUInt64)
+  if v.exactUIntValid then
+    outV = SmCInt(v.exactUInt)
     return TRUE
   end if
-  return TryGetExactInt64FromDouble(v.scalar, outV)
+  return TryGetExactSmIntFromFloat(v.scalar, outV)
 end function
 
-private function TryGetExactInt64Scalar(byref s as ScalarValue, byref outV as LongInt) as Boolean
+private function TryGetExactSmIntScalar(byref s as ScalarValue, byref outV as SmInt) as Boolean
   ScalarRepairExactMetadata(s)
-  if ScalarExactInt64Valid(s) then
-    outV = s.exactInt64
+  if ScalarExactSmIntValid(s) then
+    outV = s.exactInt
     return TRUE
   end if
-  if s.scalarStorageKind = SSK_INT64 then
-    outV = s.exactInt64
+  if s.scalarStorageKind = SSK_SMINT then
+    outV = s.exactInt
     return TRUE
   end if
-  if ScalarExactUInt64Valid(s) then
-    outV = CLngInt(s.exactUInt64)
+  if ScalarExactSmUIntValid(s) then
+    outV = SmCInt(s.exactUInt)
     return TRUE
   end if
-  if s.scalarStorageKind = SSK_UINT64 andalso s.exactUInt64 <= FB_I64_MAX_U then
-    outV = CLngInt(s.exactUInt64)
+  if s.scalarStorageKind = SSK_SMUINT andalso s.exactUInt <= SM_INT_MAX_U then
+    outV = SmCInt(s.exactUInt)
     return TRUE
   end if
-  return TryGetExactInt64FromDouble(s.scalar, outV)
+  return TryGetExactSmIntFromFloat(s.scalar, outV)
 end function
 
-private function TryGetExactNonNegativeUInt64Scalar(byref s as ScalarValue, byref outV as ULongInt) as Boolean
+private function TryGetExactNonNegativeSmUIntScalar(byref s as ScalarValue, byref outV as SmUInt) as Boolean
   ScalarRepairExactMetadata(s)
-  if ScalarExactUInt64Valid(s) orelse s.scalarStorageKind = SSK_UINT64 then
-    outV = s.exactUInt64
+  if ScalarExactSmUIntValid(s) orelse s.scalarStorageKind = SSK_SMUINT then
+    outV = s.exactUInt
     return TRUE
   end if
-  if ScalarExactInt64Valid(s) andalso s.exactInt64 >= 0 then
-    outV = CULngInt(s.exactInt64)
+  if ScalarExactSmIntValid(s) andalso s.exactInt >= 0 then
+    outV = SmCUInt(s.exactInt)
     return TRUE
   end if
-  if s.scalarStorageKind = SSK_INT64 andalso s.exactInt64 >= 0 then
-    outV = CULngInt(s.exactInt64)
+  if s.scalarStorageKind = SSK_SMINT andalso s.exactInt >= 0 then
+    outV = SmCUInt(s.exactInt)
     return TRUE
   end if
   return FALSE
 end function
 
-private function UInt64MagnitudeOfInt64(byval n as LongInt) as ULongInt
-  if n < 0 then return (not CULngInt(n)) + 1ull
-  return CULngInt(n)
+private function UIntMagnitudeOfSmInt(byval n as SmInt) as SmUInt
+  if n < 0 then return (not SmCUInt(n)) + SmCUInt(1)
+  return SmCUInt(n)
 end function
 
-'' Exact integer as sign + magnitude; uint64 above INT64_MAX is never read as negative.
-private function TryGetExactSignMagnitudeScalar(byref s as ScalarValue, byref isNeg as Boolean, byref mag as ULongInt) as Boolean
-  dim n as LongInt
-  if TryGetExactNonNegativeUInt64Scalar(s, mag) then
+'' Exact integer as sign + magnitude; SmUInt above SM_INT_MAX is never read as negative.
+private function TryGetExactSignMagnitudeScalar(byref s as ScalarValue, byref isNeg as Boolean, byref mag as SmUInt) as Boolean
+  dim n as SmInt
+  if TryGetExactNonNegativeSmUIntScalar(s, mag) then
     isNeg = FALSE
     return TRUE
   end if
-  if TryGetExactInt64Scalar(s, n) = FALSE then return FALSE
+  if TryGetExactSmIntScalar(s, n) = FALSE then return FALSE
   isNeg = (n < 0)
-  mag = UInt64MagnitudeOfInt64(n)
+  mag = UIntMagnitudeOfSmInt(n)
   return TRUE
 end function
 
 '' mag must be <= 2^63 when isNeg.
-private sub ValueSetFromSignMagnitude(byref v as EvalValue, byval isNeg as Boolean, byval mag as ULongInt)
-  if isNeg andalso mag <> 0ull then
-    if mag = FB_I64_MIN_MAG_U then
-      ValueSetInt64(v, FB_I64_MIN)
+private sub ValueSetFromSignMagnitude(byref v as EvalValue, byval isNeg as Boolean, byval mag as SmUInt)
+  if isNeg andalso mag <> SmCUInt(0) then
+    if mag = SM_INT_MIN_MAG then
+      ValueSetSmInt(v, SM_INT_MIN)
     else
-      ValueSetInt64(v, -CLngInt(mag))
+      ValueSetSmInt(v, -SmCInt(mag))
     end if
   else
-    ValueSetUInt64PreferInt64(v, mag)
+    ValueSetSmUIntPreferSmInt(v, mag)
   end if
 end sub
 
-'' Exact signed int64, including from uint64 metadata only when value fits LLONG_MAX (no wrap).
-private function TryGetExactSignedInt64NoUIntWrapScalar(byref s as ScalarValue, byref outV as LongInt) as Boolean
-  if ScalarExactInt64Valid(s) then
-    outV = s.exactInt64
+'' Exact signed SmInt, including from SmUInt metadata only when value fits SM_INT_MAX (no wrap).
+private function TryGetExactSignedIntNoSmUIntWrapScalar(byref s as ScalarValue, byref outV as SmInt) as Boolean
+  if ScalarExactSmIntValid(s) then
+    outV = s.exactInt
     return TRUE
   end if
-  if ScalarExactUInt64Valid(s) andalso s.exactUInt64 <= FB_I64_MAX_U then
-    outV = CLngInt(s.exactUInt64)
+  if ScalarExactSmUIntValid(s) andalso s.exactUInt <= SM_INT_MAX_U then
+    outV = SmCInt(s.exactUInt)
     return TRUE
   end if
-  return TryGetExactInt64FromDouble(s.scalar, outV)
+  return TryGetExactSmIntFromFloat(s.scalar, outV)
 end function
 
-'' Metadata-only signed int64 (no float restore); for sqr/hypot exact integer paths.
-private function TryGetExactSignedInt64NoUIntWrapScalarStrict(byref s as ScalarValue, byref outV as LongInt) as Boolean
+'' Metadata-only signed SmInt (no float restore); for sqr/hypot exact integer paths.
+private function TryGetExactSignedIntNoSmUIntWrapScalarStrict(byref s as ScalarValue, byref outV as SmInt) as Boolean
   ScalarRepairExactMetadata(s)
-  if ScalarExactInt64Valid(s) then
-    outV = s.exactInt64
+  if ScalarExactSmIntValid(s) then
+    outV = s.exactInt
     return TRUE
   end if
-  if ScalarExactUInt64Valid(s) andalso s.exactUInt64 <= FB_I64_MAX_U then
-    outV = CLngInt(s.exactUInt64)
+  if ScalarExactSmUIntValid(s) andalso s.exactUInt <= SM_INT_MAX_U then
+    outV = SmCInt(s.exactUInt)
     return TRUE
   end if
-  if s.scalarStorageKind = SSK_INT64 then
-    outV = s.exactInt64
+  if s.scalarStorageKind = SSK_SMINT then
+    outV = s.exactInt
     return TRUE
   end if
-  if s.scalarStorageKind = SSK_UINT64 andalso s.exactUInt64 <= FB_I64_MAX_U then
-    outV = CLngInt(s.exactUInt64)
+  if s.scalarStorageKind = SSK_SMUINT andalso s.exactUInt <= SM_INT_MAX_U then
+    outV = SmCInt(s.exactUInt)
     return TRUE
   end if
   return FALSE
 end function
 
-private function UniqueHashKeyFromDouble(byval v as Double) as ULongInt
+private function UniqueHashKeyFromFloat(byval v as SmFloat) as SmUInt
   if v = 0 then return 0 ' Canonicalize +0/-0.
-  dim bits as DoubleBits
+  dim bits as FloatBits
   bits.d = v
   return bits.u
+end function
+
+'' Combine real/imag float keys the same way as C++ CartesianKeyHash (unique complex path).
+private function UniqueHashKeyFromCartesian(byval re as SmFloat, byval im as SmFloat) as SmUInt
+  dim h1 as SmUInt = UniqueHashKeyFromFloat(re)
+  dim h2 as SmUInt = UniqueHashKeyFromFloat(im)
+  return h1 xor (h2 + &h9e3779b9u + (h1 shl 6) + (h1 shr 2))
 end function
 
 private function NextPow2AtLeast(byval n as Integer) as Integer
   dim cap as Integer = 1
   while cap < n
-    if cap > &h3FFFFFFF then return n
+    if cap > &h3FFFFFFF then return n  '' SM_FIXED_WIDTH: array capacity (Integer), not SmInt
     cap = cap shl 1
   wend
   return cap
 end function
 
-private sub SwapDouble(byref a as Double, byref b as Double)
-  dim t as Double = a
+private sub SwapFloat(byref a as SmFloat, byref b as SmFloat)
+  dim t as SmFloat = a
   a = b
   b = t
 end sub
 
-private function TryAddInt64(byval a as LongInt, byval b as LongInt, byref outV as LongInt) as Boolean
-  '' Post-hoc signed overflow test (avoids FB_I64_MIN/MAX +/- b on x86_64 -gen gcc).
+private function TryAddSmInt(byval a as SmInt, byval b as SmInt, byref outV as SmInt) as Boolean
+  '' Post-hoc wrap test: SM_INT_MAX/MIN +/- b pre-checks miscompile under -gen gcc -O2.
   outV = a + b
   if b > 0 andalso outV < a then return FALSE
   if b < 0 andalso outV > a then return FALSE
   return TRUE
 end function
 
-private function TrySubInt64(byval a as LongInt, byval b as LongInt, byref outV as LongInt) as Boolean
+private function TrySubSmInt(byval a as SmInt, byval b as SmInt, byref outV as SmInt) as Boolean
+  '' Post-hoc wrap test (same gcc constraint as TryAddSmInt).
   outV = a - b
   if b > 0 andalso outV > a then return FALSE
   if b < 0 andalso outV < a then return FALSE
   return TRUE
 end function
 
-private function TryMulInt64(byval a as LongInt, byval b as LongInt, byref outV as LongInt) as Boolean
+private function TryMulSmInt(byval a as SmInt, byval b as SmInt, byref outV as SmInt) as Boolean
   if a = 0 orelse b = 0 then outV = 0: return TRUE
   if a = -1 then
-    if b = FB_I64_MIN then return FALSE
+    if b = SM_INT_MIN then return FALSE
     outV = -b
     return TRUE
   end if
   if b = -1 then
-    if a = FB_I64_MIN then return FALSE
+    if a = SM_INT_MIN then return FALSE
     outV = -a
     return TRUE
   end if
-  '' Post-hoc signed overflow test (avoids FB_I64_MAX \ b style pre-checks under -gen gcc -O2).
-  outV = a * b
-  if a <> 0 andalso (outV \ a) <> b then return FALSE
+  '' Magnitude pre-check + product: avoids signed SM_INT_MIN \ b and post-hoc wrap (INT_MIN*2 → 0).
+  dim ua as SmUInt = UIntMagnitudeOfSmInt(a)
+  dim ub as SmUInt = UIntMagnitudeOfSmInt(b)
+  if ub <> SmCUInt(0) andalso ua > (SM_INT_MAX_U \ ub) then return FALSE
+  dim prodU as SmUInt = ua * ub
+  if (a < 0) xor (b < 0) then
+    outV = -SmCInt(prodU)
+  else
+    outV = SmCInt(prodU)
+  end if
   return TRUE
 end function
 
 private function ScalarHasExactIntegerPayload(byref sv as ScalarValue) as Boolean
   if ScalarIsTime(sv) then return FALSE
-  return ScalarExactInt64Valid(sv) orelse ScalarExactUInt64Valid(sv) orelse _
-    sv.scalarStorageKind = SSK_INT64 orelse sv.scalarStorageKind = SSK_UINT64
+  return ScalarExactSmIntValid(sv) orelse ScalarExactSmUIntValid(sv) orelse _
+    sv.scalarStorageKind = SSK_SMINT orelse sv.scalarStorageKind = SSK_SMUINT
 end function
 
-private function TryMulExactInt64Square(byval i as LongInt, byref outV as LongInt) as Boolean
-  dim u as ULongInt
+private function TryMulExactSmIntSquare(byval i as SmInt, byref outV as SmInt) as Boolean
+  dim u as SmUInt
   if i >= 0 then
-    u = CULngInt(i)
-  elseif i = FB_I64_MIN then
+    u = SmCUInt(i)
+  elseif i = SM_INT_MIN then
     return FALSE
   else
-    u = CULngInt(-i)
+    u = SmCUInt(-i)
   end if
-  dim sqU as ULongInt
-  if TryMulULongChecked(u, u, sqU) = FALSE orelse sqU > FB_I64_MAX_U then return FALSE
-  outV = CLngInt(sqU)
+  dim sqU as SmUInt
+  if TryMulSmUIntChecked(u, u, sqU) = FALSE orelse sqU > SM_INT_MAX_U then return FALSE
+  outV = SmCInt(sqU)
   return TRUE
 end function
 
-'' Verify (rootR + rootI*i)^2 = expR + expI*i using checked int64 arithmetic.
-private function TryVerifyComplexCartesianSquareExact(byval rootR as LongInt, byval rootI as LongInt, byval expR as LongInt, byval expI as LongInt) as Boolean
-  dim rr as LongInt
-  dim ii as LongInt
-  dim ri as LongInt
-  dim outRe as LongInt
-  dim outIm as LongInt
-  if TryMulExactInt64Square(rootR, rr) = FALSE then return FALSE
-  if TryMulExactInt64Square(rootI, ii) = FALSE then return FALSE
-  if TrySubInt64(rr, ii, outRe) = FALSE then return FALSE
-  if TryMulInt64(rootR, rootI, ri) = FALSE then return FALSE
-  if TryAddInt64(ri, ri, outIm) = FALSE then return FALSE
+'' Verify (rootR + rootI*i)^2 = expR + expI*i using checked SmInt arithmetic.
+private function TryVerifyComplexCartesianSquareExact(byval rootR as SmInt, byval rootI as SmInt, byval expR as SmInt, byval expI as SmInt) as Boolean
+  dim rr as SmInt
+  dim ii as SmInt
+  dim ri as SmInt
+  dim outRe as SmInt
+  dim outIm as SmInt
+  if TryMulExactSmIntSquare(rootR, rr) = FALSE then return FALSE
+  if TryMulExactSmIntSquare(rootI, ii) = FALSE then return FALSE
+  if TrySubSmInt(rr, ii, outRe) = FALSE then return FALSE
+  if TryMulSmInt(rootR, rootI, ri) = FALSE then return FALSE
+  if TryAddSmInt(ri, ri, outIm) = FALSE then return FALSE
   if outRe <> expR orelse outIm <> expI then return FALSE
   return TRUE
 end function
@@ -2494,10 +2580,10 @@ end function
 '' sqrt: library root; exact-int output only for exact-int input when round(r)^2 equals input (checked mul).
 private sub ApplySqrtScalarValue(byref sv as ScalarValue, byref outV as EvalValue)
   ScalarRepairExactMetadata(sv)
-  dim xIn as Double
-  dim ai as Double
+  dim xIn as SmFloat
+  dim ai as SmFloat
   ScalarLoadCartesian(sv, xIn, ai)
-  dim r as Double = sqr(xIn)
+  dim r as SmFloat = sqr(xIn)
   if ScalarHasExactIntegerPayload(sv) = FALSE then
     ValueSetScalar(outV, r)
     exit sub
@@ -2506,15 +2592,15 @@ private sub ApplySqrtScalarValue(byref sv as ScalarValue, byref outV as EvalValu
     ValueSetScalar(outV, r)
     exit sub
   end if
-  dim inpU as ULongInt
-  if TryGetExactNonNegativeUInt64Scalar(sv, inpU) = FALSE then
+  dim inpU as SmUInt
+  if TryGetExactNonNegativeSmUIntScalar(sv, inpU) = FALSE then
     ValueSetScalar(outV, r)
     exit sub
   end if
-  dim n as ULongInt = CULngInt(round(r))
-  dim sq as ULongInt
-  if TryMulULongChecked(n, n, sq) andalso sq = inpU then
-    ValueSetUInt64PreferInt64(outV, n)
+  dim n as SmUInt = SmCUInt(round(r))
+  dim sq as SmUInt
+  if TryMulSmUIntChecked(n, n, sq) andalso sq = inpU then
+    ValueSetSmUIntPreferSmInt(outV, n)
   else
     ValueSetScalar(outV, r)
   end if
@@ -2523,16 +2609,16 @@ end sub
 private function TryApplySqrExactScalar(byref sv as ScalarValue, byref outV as EvalValue) as Boolean
   ScalarRepairExactMetadata(sv)
   if ScalarHasExactIntegerPayload(sv) = FALSE then return FALSE
-  dim i as LongInt
-  if TryGetExactSignedInt64NoUIntWrapScalarStrict(sv, i) then
-    dim sq as LongInt
-    if TryMulExactInt64Square(i, sq) then ValueSetInt64(outV, sq): return TRUE
+  dim i as SmInt
+  if TryGetExactSignedIntNoSmUIntWrapScalarStrict(sv, i) then
+    dim sq as SmInt
+    if TryMulExactSmIntSquare(i, sq) then ValueSetSmInt(outV, sq): return TRUE
   else
-    dim u as ULongInt
-    if TryGetExactNonNegativeUInt64Scalar(sv, u) then
-      dim sqU as ULongInt
-      if TryMulULongChecked(u, u, sqU) then
-        ValueSetUInt64PreferInt64(outV, sqU)
+    dim u as SmUInt
+    if TryGetExactNonNegativeSmUIntScalar(sv, u) then
+      dim sqU as SmUInt
+      if TryMulSmUIntChecked(u, u, sqU) then
+        ValueSetSmUIntPreferSmInt(outV, sqU)
         return TRUE
       end if
     end if
@@ -2544,20 +2630,20 @@ private function TryApplyHypotExactScalars(byref leftS as ScalarValue, byref rig
   ScalarRepairExactMetadata(leftS)
   ScalarRepairExactMetadata(rightS)
   if ScalarHasExactIntegerPayload(leftS) = FALSE orelse ScalarHasExactIntegerPayload(rightS) = FALSE then return FALSE
-  dim la as LongInt, lb as LongInt
-  if TryGetExactSignedInt64NoUIntWrapScalarStrict(leftS, la) andalso TryGetExactSignedInt64NoUIntWrapScalarStrict(rightS, lb) then
-    dim aa as LongInt, bb as LongInt, sumSq as LongInt
-    if TryMulExactInt64Square(la, aa) andalso TryMulExactInt64Square(lb, bb) andalso TryAddInt64(aa, bb, sumSq) then
-      ValueSetScalar(outV, sqr(CDbl(sumSq)))
+  dim la as SmInt, lb as SmInt
+  if TryGetExactSignedIntNoSmUIntWrapScalarStrict(leftS, la) andalso TryGetExactSignedIntNoSmUIntWrapScalarStrict(rightS, lb) then
+    dim aa as SmInt, bb as SmInt, sumSq as SmInt
+    if TryMulExactSmIntSquare(la, aa) andalso TryMulExactSmIntSquare(lb, bb) andalso TryAddSmInt(aa, bb, sumSq) then
+      ValueSetScalar(outV, sqr(SmCFloat(sumSq)))
       return TRUE
     end if
     return FALSE
   end if
-  dim ua as ULongInt, ub as ULongInt
-  if TryGetExactNonNegativeUInt64Scalar(leftS, ua) andalso TryGetExactNonNegativeUInt64Scalar(rightS, ub) then
-    dim aaU as ULongInt, bbU as ULongInt, sumSqU as ULongInt
-    if TryMulULongChecked(ua, ua, aaU) andalso TryMulULongChecked(ub, ub, bbU) andalso TryAddULongChecked(aaU, bbU, sumSqU) then
-      ValueSetScalar(outV, sqr(CDbl(sumSqU)))
+  dim ua as SmUInt, ub as SmUInt
+  if TryGetExactNonNegativeSmUIntScalar(leftS, ua) andalso TryGetExactNonNegativeSmUIntScalar(rightS, ub) then
+    dim aaU as SmUInt, bbU as SmUInt, sumSqU as SmUInt
+    if TryMulSmUIntChecked(ua, ua, aaU) andalso TryMulSmUIntChecked(ub, ub, bbU) andalso TryAddSmUIntChecked(aaU, bbU, sumSqU) then
+      ValueSetScalar(outV, sqr(SmCFloat(sumSqU)))
       return TRUE
     end if
   end if
@@ -2565,81 +2651,80 @@ private function TryApplyHypotExactScalars(byref leftS as ScalarValue, byref rig
 end function
 
 '' Exact-int pow/**: float guess, then checked integer power verifies root or integer exponent.
-private function ScalarExactIntFitsPowExactPolicy(byref s as ScalarValue, byref outI as LongInt) as Boolean
+private function ScalarExactIntFitsPowExactPolicy(byref s as ScalarValue, byref outI as SmInt) as Boolean
   if ScalarIsTime(s) then return FALSE
-  if TryGetExactSignedInt64NoUIntWrapScalarStrict(s, outI) = FALSE then return FALSE
-  if outI = FB_I64_MIN then return FALSE
-  dim mag as ULongInt
+  if TryGetExactSignedIntNoSmUIntWrapScalarStrict(s, outI) = FALSE then return FALSE
+  if outI = SM_INT_MIN then return FALSE
+  dim mag as SmUInt
   if outI >= 0 then
-    mag = CULngInt(outI)
+    mag = SmCUInt(outI)
   else
-    mag = CULngInt(-outI)
+    mag = SmCUInt(-outI)
   end if
-  return mag < CULngInt(FB_MAX_EXACT_INT_FROM_DOUBLE)
+  return IsMagBelowExactFloatLimit(mag)
 end function
 
-private function TryPowInt64(byval baseV as LongInt, byval expV as LongInt, byref outV as LongInt) as Boolean
+private function TryPowSmInt(byval baseV as SmInt, byval expV as SmInt, byref outV as SmInt) as Boolean
   if expV < 0 then return FALSE
-  dim r as LongInt = 1
-  dim b as LongInt = baseV
-  dim e as LongInt = expV
+  dim r as SmInt = 1
+  dim b as SmInt = baseV
+  dim e as SmInt = expV
   while e > 0
     if (e and 1) <> 0 then
-      if TryMulInt64(r, b, r) = FALSE then return FALSE
+      if TryMulSmInt(r, b, r) = FALSE then return FALSE
     end if
     e = e shr 1
     if e > 0 then
-      if TryMulInt64(b, b, b) = FALSE then return FALSE
+      if TryMulSmInt(b, b, b) = FALSE then return FALSE
     end if
   wend
   outV = r
   return TRUE
 end function
 
-function TryPowULong(byval baseV as ULongInt, byval expV as ULongInt, byref outV as ULongInt) as Boolean
-  dim r as ULongInt = 1
-  dim b as ULongInt = baseV
-  dim e as ULongInt = expV
-  while e > 0ull
-    if (e and 1ull) <> 0ull then
-      if TryMulULongChecked(r, b, r) = FALSE then return FALSE
+function TryPowSmUInt(byval baseV as SmUInt, byval expV as SmUInt, byref outV as SmUInt) as Boolean
+  dim r as SmUInt = 1
+  dim b as SmUInt = baseV
+  dim e as SmUInt = expV
+  while e > SmCUInt(0)
+    if (e and SmCUInt(1)) <> SmCUInt(0) then
+      if TryMulSmUIntChecked(r, b, r) = FALSE then return FALSE
     end if
     e = e shr 1
-    if e > 0ull then
-      if TryMulULongChecked(b, b, b) = FALSE then return FALSE
+    if e > SmCUInt(0) then
+      if TryMulSmUIntChecked(b, b, b) = FALSE then return FALSE
     end if
   wend
   outV = r
   return TRUE
 end function
 
-private function TryPowVerifyRootExact(byval valueInt as LongInt, byval rootCand as LongInt, byval rootDeg as LongInt) as Boolean
+private function TryPowVerifyRootExact(byval valueInt as SmInt, byval rootCand as SmInt, byval rootDeg as SmInt) as Boolean
   if rootDeg < 2 then return FALSE
   if valueInt < 0 andalso (rootDeg and 1) = 0 then return FALSE
   if rootCand >= 0 andalso valueInt >= 0 then
-    dim reconU as ULongInt
-    if TryPowULong(CULngInt(rootCand), CULngInt(rootDeg), reconU) = FALSE then return FALSE
-    return CLngInt(reconU) = valueInt
+    dim reconU as SmUInt
+    if TryPowSmUInt(SmCUInt(rootCand), SmCUInt(rootDeg), reconU) = FALSE then return FALSE
+    return SmCInt(reconU) = valueInt
   end if
-  dim reconI as LongInt
-  if TryPowInt64(rootCand, rootDeg, reconI) = FALSE then return FALSE
+  dim reconI as SmInt
+  if TryPowSmInt(rootCand, rootDeg, reconI) = FALSE then return FALSE
   return reconI = valueInt
 end function
 
-private function FractionalPowerIsOddUnitRoot(byval p as Double, byref outN as LongInt) as Boolean
+private function FractionalPowerIsOddUnitRoot(byval p as SmFloat, byref outN as SmInt) as Boolean
   if p <= 0.0 orelse p >= 1.0 then return FALSE
-  dim inv as Double = 1.0 / p
-  '' Any odd n whose reciprocal is still the closest double. 2^53 is the last exact integer double.
-  if inv < 2.0 orelse inv > 9007199254740992.0 then return FALSE
-  outN = CLngInt(round(inv))
-  if outN < 2 then return FALSE
+  dim inv as SmFloat = 1.0 / p
+  '' Any odd n whose reciprocal is still the closest SmFloat. 2^mantissa is the last exact integer SmFloat.
+  if inv < 2.0 orelse inv > SM_MAX_EXACT_INT_FROM_FLOAT then return FALSE
+  if TryRoundFloatToSmInt(inv, outN) = FALSE orelse outN < 2 then return FALSE
   '' Only the double nearest 1/n qualifies; 0.33333334 is not a cube root.
-  if abs(p * CDbl(outN) - 1.0) > FB_UNIT_ROOT_EXPONENT_TOL then return FALSE
+  if abs(p * SmCFloat(outN) - 1.0) > SM_TOL_LOST0 then return FALSE
   return (outN and 1) <> 0
 end function
 
 '' Fractional exponent 1/n (odd n) or 1/2 (principal sqrt / half-power).
-private function FractionalPowerResolveRootDegree(byval p as Double, byref outN as LongInt) as Boolean
+private function FractionalPowerResolveRootDegree(byval p as SmFloat, byref outN as SmInt) as Boolean
   if FractionalPowerIsOddUnitRoot(p, outN) then return TRUE
   if p = 0.5 then
     outN = 2
@@ -2648,77 +2733,77 @@ private function FractionalPowerResolveRootDegree(byval p as Double, byref outN 
   return FALSE
 end function
 
-private function TryGetSmallIntegerExponent(byval p as Double, byref outN as LongInt) as Boolean
-  if (p >= 0.0 andalso p <= 63.0) = FALSE then return FALSE
+private function TryGetSmallIntegerExponent(byval p as SmFloat, byref outN as SmInt) as Boolean
+  if (p >= 0.0 andalso p <= SM_MAX_SHIFT) = FALSE then return FALSE
   if p <> Int(p) then return FALSE
-  outN = CLngInt(p)
+  outN = SmCInt(p)
   return TRUE
 end function
 
 '' Float pow(negative, non-integer) is NaN on some runtimes; odd unit roots use |base|^power with sign.
-private function TryPowFloatGuess(byval valueInt as LongInt, byval baseScalar as Double, byval p as Double, byref outR as Double) as Boolean
+private function TryPowFloatGuess(byval valueInt as SmInt, byval baseScalar as SmFloat, byval p as SmFloat, byref outR as SmFloat) as Boolean
   if valueInt >= 0 orelse p <= 0.0 orelse p >= 1.0 then
     outR = baseScalar ^ p
     return IsNonFiniteValue(outR) = FALSE
   end if
-  dim nRoot as LongInt
+  dim nRoot as SmInt
   if FractionalPowerIsOddUnitRoot(p, nRoot) = FALSE then
     outR = baseScalar ^ p
     return IsNonFiniteValue(outR) = FALSE
   end if
-  dim magD as Double
-  if valueInt = FB_I64_MIN then
-    magD = CDbl(FB_I64_MIN_MAG_U)
+  dim magD as SmFloat
+  if valueInt = SM_INT_MIN then
+    magD = SmCFloat(SM_INT_MIN_MAG)
   else
-    magD = CDbl(-valueInt)
+    magD = SmCFloat(-valueInt)
   end if
-  dim rootMag as Double = magD ^ p
+  dim rootMag as SmFloat = magD ^ p
   if IsNonFiniteValue(rootMag) then return FALSE
   outR = -rootMag
   return TRUE
 end function
 
-private function TryPowVerifyIntExponentExact(byval valueInt as LongInt, byval powResult as LongInt, byval expDeg as LongInt) as Boolean
-  if expDeg < 0 orelse expDeg > 63 then return FALSE
-  dim recon as LongInt
-  if TryPowInt64(valueInt, expDeg, recon) = FALSE then return FALSE
+private function TryPowVerifyIntExponentExact(byval valueInt as SmInt, byval powResult as SmInt, byval expDeg as SmInt) as Boolean
+  if expDeg < 0 orelse expDeg > SM_MAX_SHIFT then return FALSE
+  dim recon as SmInt
+  if TryPowSmInt(valueInt, expDeg, recon) = FALSE then return FALSE
   return recon = powResult
 end function
 
 '' Negative real base, fractional power 1/n (odd n): use real IEEE pow, never principal complex.
-private function TryApplyRealScalarPowNegFractional(byref leftS as ScalarValue, byval p as Double, byref outV as EvalValue) as Boolean
-  dim nRoot as LongInt
+private function TryApplyRealScalarPowNegFractional(byref leftS as ScalarValue, byval p as SmFloat, byref outV as EvalValue) as Boolean
+  dim nRoot as SmInt
   if FractionalPowerIsOddUnitRoot(p, nRoot) = FALSE then return FALSE
-  dim ar as Double, ai as Double
+  dim ar as SmFloat, ai as SmFloat
   ScalarLoadCartesian(leftS, ar, ai)
   if ai <> 0.0 orelse ar >= 0.0 then return FALSE
-  dim valueInt as LongInt
-  if TryGetExactSignedInt64NoUIntWrapScalarStrict(leftS, valueInt) then
-    if valueInt <> FB_I64_MIN then
-      dim realR as Double
+  dim valueInt as SmInt
+  if TryGetExactSignedIntNoSmUIntWrapScalarStrict(leftS, valueInt) then
+    if valueInt <> SM_INT_MIN then
+      dim realR as SmFloat
       if TryPowFloatGuess(valueInt, leftS.scalar, p, realR) then
         ValueSetScalar(outV, realR)
         return TRUE
       end if
     end if
   end if
-  dim rootMag as Double = (-ar) ^ p
+  dim rootMag as SmFloat = (-ar) ^ p
   if IsNonFiniteValue(rootMag) then return FALSE
   ValueSetScalar(outV, -rootMag)
   return TRUE
 end function
 
-private function TryApplyPowExactScalarsByKind(byval kind as ScalarExactKind, byval valueSigned as LongInt, byval valueUnsigned as ULongInt, byref leftS as ScalarValue, byref rightS as ScalarValue, byref outV as EvalValue) as Boolean
+private function TryApplyPowExactScalarsByKind(byval kind as ScalarExactKind, byval valueSigned as SmInt, byval valueUnsigned as SmUInt, byref leftS as ScalarValue, byref rightS as ScalarValue, byref outV as EvalValue) as Boolean
   if kind = SEK_SIGNED then
-    if valueSigned = 1 then ValueSetInt64(outV, 1): return TRUE
-  elseif valueUnsigned = 1ull then
-    ValueSetInt64(outV, 1)
+    if valueSigned = 1 then ValueSetSmInt(outV, 1): return TRUE
+  elseif valueUnsigned = SmCUInt(1) then
+    ValueSetSmInt(outV, 1)
     return TRUE
   end if
-  dim p as Double = rightS.scalar
+  dim p as SmFloat = rightS.scalar
   if IsNonFiniteValue(p) then return FALSE
-  if p = 0.0 then ValueSetInt64(outV, 1): return TRUE
-  dim r as Double
+  if p = 0.0 then ValueSetSmInt(outV, 1): return TRUE
+  dim r as SmFloat
   if kind = SEK_SIGNED then
     if TryPowFloatGuess(valueSigned, leftS.scalar, p, r) = FALSE then return FALSE
   else
@@ -2726,19 +2811,20 @@ private function TryApplyPowExactScalarsByKind(byval kind as ScalarExactKind, by
     if IsNonFiniteValue(r) then return FALSE
   end if
   if p > 0.0 andalso p < 1.0 then
-    dim nRoot as LongInt
+    dim nRoot as SmInt
     if FractionalPowerIsOddUnitRoot(p, nRoot) then
       if kind = SEK_SIGNED then
-        dim rootCand as LongInt = CLngInt(round(r))
+        dim rootCand as SmInt
+        if TryRoundFloatToSmInt(r, rootCand) = FALSE then return FALSE
         if TryPowVerifyRootExact(valueSigned, rootCand, nRoot) then
-          ValueSetInt64(outV, rootCand)
+          ValueSetSmInt(outV, rootCand)
           return TRUE
         end if
       else
-        dim n as ULongInt = CULngInt(round(r))
-        dim sq as ULongInt
-        if TryPowULong(n, CULngInt(nRoot), sq) andalso sq = valueUnsigned then
-          ValueSetUInt64PreferInt64(outV, n)
+        dim n as SmUInt
+        dim sq as SmUInt
+        if TryRoundFloatToSmUInt(r, n) andalso TryPowSmUInt(n, SmCUInt(nRoot), sq) andalso sq = valueUnsigned then
+          ValueSetSmUIntPreferSmInt(outV, n)
           return TRUE
         end if
       end if
@@ -2746,19 +2832,19 @@ private function TryApplyPowExactScalarsByKind(byval kind as ScalarExactKind, by
     return FALSE
   end if
   if p >= 1.0 then
-    dim nExp as LongInt
+    dim nExp as SmInt
     if TryGetSmallIntegerExponent(p, nExp) then
       if kind = SEK_SIGNED then
-        dim powResult as LongInt = CLngInt(round(r))
-        if TryPowVerifyIntExponentExact(valueSigned, powResult, nExp) then
-          ValueSetInt64(outV, powResult)
+        dim powResult as SmInt
+        if TryRoundFloatToSmInt(r, powResult) andalso TryPowVerifyIntExponentExact(valueSigned, powResult, nExp) then
+          ValueSetSmInt(outV, powResult)
           return TRUE
         end if
       else
-        dim powResultU as ULongInt = CULngInt(round(r))
-        dim recon as ULongInt
-        if TryPowULong(valueUnsigned, CULngInt(nExp), recon) andalso recon = powResultU then
-          ValueSetUInt64PreferInt64(outV, powResultU)
+        dim powResultU as SmUInt
+        dim recon as SmUInt
+        if TryRoundFloatToSmUInt(r, powResultU) andalso TryPowSmUInt(valueUnsigned, SmCUInt(nExp), recon) andalso recon = powResultU then
+          ValueSetSmUIntPreferSmInt(outV, powResultU)
           return TRUE
         end if
       end if
@@ -2767,39 +2853,39 @@ private function TryApplyPowExactScalarsByKind(byval kind as ScalarExactKind, by
   return FALSE
 end function
 
-private function TryRecoverLargeSignedOddRoot(byval valueInt as LongInt, byval p as Double, byref outV as EvalValue, byref decided as Boolean) as Boolean
+private function TryRecoverLargeSignedOddRoot(byval valueInt as SmInt, byval p as SmFloat, byref outV as EvalValue, byref decided as Boolean) as Boolean
   decided = FALSE
   if IsNonFiniteValue(p) orelse p <= 0.0 orelse p >= 1.0 then return FALSE
-  dim nRoot as LongInt
+  dim nRoot as SmInt
   if FractionalPowerIsOddUnitRoot(p, nRoot) = FALSE then return FALSE
-  dim isMin as Boolean = (valueInt = FB_I64_MIN)
-  dim mag as ULongInt
+  dim isMin as Boolean = (valueInt = SM_INT_MIN)
+  dim mag as SmUInt
   if isMin then
-    mag = FB_I64_MIN_MAG_U
+    mag = SM_INT_MIN_MAG
   elseif valueInt < 0 then
-    mag = CULngInt(-valueInt)
+    mag = SmCUInt(-valueInt)
   else
-    mag = CULngInt(valueInt)
+    mag = SmCUInt(valueInt)
   end if
-  if isMin = FALSE andalso mag < CULngInt(FB_MAX_EXACT_INT_FROM_DOUBLE) then return FALSE
+  if isMin = FALSE andalso IsMagBelowExactFloatLimit(mag) then return FALSE
   decided = TRUE
-  dim magD as Double = iif(isMin, CDbl(FB_I64_MIN_MAG_U), CDbl(mag))
-  dim rootMag as Double = magD ^ p
+  dim magD as SmFloat = iif(isMin, SmCFloat(SM_INT_MIN_MAG), SmCFloat(mag))
+  dim rootMag as SmFloat = magD ^ p
   if IsNonFiniteValue(rootMag) orelse rootMag < 0.0 then return FALSE
-  dim rounded as Double = round(rootMag)
-  if rounded < 0.0 orelse rounded >= 2.0 * CDbl(FB_I64_MIN_MAG_U) then return FALSE
-  dim rU as ULongInt = CULngInt(rounded)
-  dim recon as ULongInt
-  if TryPowULong(rU, CULngInt(nRoot), recon) = FALSE then return FALSE
+  dim rounded as SmFloat = round(rootMag)
+  if rounded < 0.0 orelse rounded >= SM_FLOAT_SMUINT_BOUND then return FALSE
+  dim rU as SmUInt = SmCUInt(rounded)
+  dim recon as SmUInt
+  if TryPowSmUInt(rU, SmCUInt(nRoot), recon) = FALSE then return FALSE
   if recon <> mag then return FALSE
   if valueInt < 0 then
-    if rU <= FB_I64_MAX_U then
-      ValueSetInt64(outV, -CLngInt(rU))
+    if rU <= SM_INT_MAX_U then
+      ValueSetSmInt(outV, -SmCInt(rU))
     else
-      ValueSetScalar(outV, -CDbl(rU))
+      ValueSetScalar(outV, -SmCFloat(rU))
     end if
   else
-    ValueSetUInt64PreferInt64(outV, rU)
+    ValueSetSmUIntPreferSmInt(outV, rU)
   end if
   return TRUE
 end function
@@ -2808,17 +2894,17 @@ private function TryApplyPowExactScalars(byref leftS as ScalarValue, byref right
   if Parser_SupportComplexNumbers andalso (ScalarHasNonzeroImaginaryPart(leftS) orelse ScalarHasNonzeroImaginaryPart(rightS)) then
     return FALSE
   end if
-  dim valueInt as LongInt
-  if TryGetExactSignedInt64NoUIntWrapScalarStrict(leftS, valueInt) then
+  dim valueInt as SmInt
+  if TryGetExactSignedIntNoSmUIntWrapScalarStrict(leftS, valueInt) then
     dim oddRootDecided as Boolean = FALSE
     if TryRecoverLargeSignedOddRoot(valueInt, rightS.scalar, outV, oddRootDecided) then return TRUE
     if oddRootDecided then return FALSE
   end if
   if ScalarExactIntFitsPowExactPolicy(leftS, valueInt) then
-    return TryApplyPowExactScalarsByKind(SEK_SIGNED, valueInt, 0ull, leftS, rightS, outV)
+    return TryApplyPowExactScalarsByKind(SEK_SIGNED, valueInt, SmCUInt(0), leftS, rightS, outV)
   end if
-  dim inpU as ULongInt
-  if TryGetExactNonNegativeUInt64Scalar(leftS, inpU) then
+  dim inpU as SmUInt
+  if TryGetExactNonNegativeSmUIntScalar(leftS, inpU) then
     return TryApplyPowExactScalarsByKind(SEK_UNSIGNED, 0, inpU, leftS, rightS, outV)
   end if
   return FALSE
@@ -2830,11 +2916,11 @@ private function TryApplyScalarPowSpecialPaths(byref leftS as ScalarValue, byref
   return TryApplyRealScalarPowNegFractional(leftS, rightS.scalar, outV)
 end function
 
-private function FormatPlainDecimalUInt64(byval u as ULongInt) as String
-  return ULongIntToString(u)
+private function FormatPlainDecimalSmUInt(byval u as SmUInt) as String
+  return SmUIntToString(u)
 end function
 
-private function FormatSignedMagnitudeBase(byval iv as LongInt, byval baseN as Integer, byval asUnsigned as Boolean) as String
+private function FormatSignedMagnitudeBase(byval iv as SmInt, byval baseN as Integer, byval asUnsigned as Boolean) as String
   dim prefix as String
   select case baseN
     case 16: prefix = FB_STR_PREFIX_HEX
@@ -2845,114 +2931,114 @@ private function FormatSignedMagnitudeBase(byval iv as LongInt, byval baseN as I
 
   if asUnsigned then
     select case baseN
-      case 16: return prefix & Hex(CULngInt(iv))
-      case 10: return FormatPlainDecimalUInt64(CULngInt(iv))
-      case 8: return prefix & Oct(CULngInt(iv))
-      case else: return prefix & Bin(CULngInt(iv))
+      case 16: return prefix & Hex(SmCUInt(iv))
+      case 10: return FormatPlainDecimalSmUInt(SmCUInt(iv))
+      case 8: return prefix & Oct(SmCUInt(iv))
+      case else: return prefix & Bin(SmCUInt(iv))
     end select
   end if
 
-  if iv = FB_I64_MIN then
+  if iv = SM_INT_MIN then
     select case baseN
-      case 16: return "-" & prefix & Hex(FB_I64_MIN_MAG_U)
-      case 10: return "-" & FormatPlainDecimalUInt64(FB_I64_MIN_MAG_U)
-      case 8: return "-" & prefix & Oct(FB_I64_MIN_MAG_U)
-      case else: return "-" & prefix & Bin(FB_I64_MIN_MAG_U)
+      case 16: return "-" & prefix & Hex(SM_INT_MIN_MAG)
+      case 10: return "-" & FormatPlainDecimalSmUInt(SM_INT_MIN_MAG)
+      case 8: return "-" & prefix & Oct(SM_INT_MIN_MAG)
+      case else: return "-" & prefix & Bin(SM_INT_MIN_MAG)
     end select
   end if
   if iv < 0 then
     select case baseN
-      case 16: return "-" & prefix & Hex(CULngInt(-iv))
-      case 10: return "-" & FormatPlainDecimalUInt64(CULngInt(-iv))
-      case 8: return "-" & prefix & Oct(CULngInt(-iv))
-      case else: return "-" & prefix & Bin(CULngInt(-iv))
+      case 16: return "-" & prefix & Hex(SmCUInt(-iv))
+      case 10: return "-" & FormatPlainDecimalSmUInt(SmCUInt(-iv))
+      case 8: return "-" & prefix & Oct(SmCUInt(-iv))
+      case else: return "-" & prefix & Bin(SmCUInt(-iv))
     end select
   end if
 
   select case baseN
-    case 16: return prefix & Hex(CULngInt(iv))
-    case 10: return FormatPlainDecimalUInt64(CULngInt(iv))
-    case 8: return prefix & Oct(CULngInt(iv))
-    case else: return prefix & Bin(CULngInt(iv))
+    case 16: return prefix & Hex(SmCUInt(iv))
+    case 10: return FormatPlainDecimalSmUInt(SmCUInt(iv))
+    case 8: return prefix & Oct(SmCUInt(iv))
+    case else: return prefix & Bin(SmCUInt(iv))
   end select
 end function
 
-private function FormatHexScalar(byval n as Double, byref outText as String, byval asUnsigned as Boolean = FALSE) as Boolean
-  dim iv as LongInt
-  if TryGetExactInt64FromDouble(n, iv) = FALSE then return FALSE
+private function FormatHexScalar(byval n as SmFloat, byref outText as String, byval asUnsigned as Boolean = FALSE) as Boolean
+  dim iv as SmInt
+  if TryGetExactSmIntFromFloat(n, iv) = FALSE then return FALSE
   outText = FormatSignedMagnitudeBase(iv, 16, asUnsigned)
   return TRUE
 end function
 
-private function FormatHexUInt64(byval u as ULongInt) as String
+private function FormatHexSmUInt(byval u as SmUInt) as String
   return FB_STR_PREFIX_HEX & Hex(u)
 end function
 
-private function FormatBinScalar(byval n as Double, byref outText as String, byval asUnsigned as Boolean = FALSE) as Boolean
-  dim iv as LongInt
-  if TryGetExactInt64FromDouble(n, iv) = FALSE then return FALSE
+private function FormatBinScalar(byval n as SmFloat, byref outText as String, byval asUnsigned as Boolean = FALSE) as Boolean
+  dim iv as SmInt
+  if TryGetExactSmIntFromFloat(n, iv) = FALSE then return FALSE
   outText = FormatSignedMagnitudeBase(iv, 2, asUnsigned)
   return TRUE
 end function
 
-private function FormatBinUInt64(byval u as ULongInt) as String
+private function FormatBinSmUInt(byval u as SmUInt) as String
   return FB_STR_PREFIX_BIN & Bin(u)
 end function
 
-private function FormatOctScalar(byval n as Double, byref outText as String, byval asUnsigned as Boolean = FALSE) as Boolean
-  dim iv as LongInt
-  if TryGetExactInt64FromDouble(n, iv) = FALSE then return FALSE
+private function FormatOctScalar(byval n as SmFloat, byref outText as String, byval asUnsigned as Boolean = FALSE) as Boolean
+  dim iv as SmInt
+  if TryGetExactSmIntFromFloat(n, iv) = FALSE then return FALSE
   outText = FormatSignedMagnitudeBase(iv, 8, asUnsigned)
   return TRUE
 end function
 
-private function FormatOctUInt64(byval u as ULongInt) as String
+private function FormatOctSmUInt(byval u as SmUInt) as String
   return FB_STR_PREFIX_OCT & Oct(u)
 end function
 
 private function TryFormatScalarByRenderBase(byref sv as ScalarValue, byval renderBase as Integer, byval asUnsigned as Boolean, byref outText as String) as Boolean
   select case renderBase
     case 16
-      if sv.exactUInt64Valid then
-        outText = FormatHexUInt64(sv.exactUInt64)
+      if sv.exactUIntValid then
+        outText = FormatHexSmUInt(sv.exactUInt)
         return TRUE
       end if
-      if sv.exactInt64Valid then
-        outText = FormatSignedMagnitudeBase(sv.exactInt64, 16, asUnsigned)
+      if sv.exactIntValid then
+        outText = FormatSignedMagnitudeBase(sv.exactInt, 16, asUnsigned)
         return TRUE
       end if
       return FormatHexScalar(sv.scalar, outText, asUnsigned)
     case 8
-      if sv.exactUInt64Valid then
-        outText = FormatOctUInt64(sv.exactUInt64)
+      if sv.exactUIntValid then
+        outText = FormatOctSmUInt(sv.exactUInt)
         return TRUE
       end if
-      if sv.exactInt64Valid then
-        outText = FormatSignedMagnitudeBase(sv.exactInt64, 8, asUnsigned)
+      if sv.exactIntValid then
+        outText = FormatSignedMagnitudeBase(sv.exactInt, 8, asUnsigned)
         return TRUE
       end if
       return FormatOctScalar(sv.scalar, outText, asUnsigned)
     case 2
-      if sv.exactUInt64Valid then
-        outText = FormatBinUInt64(sv.exactUInt64)
+      if sv.exactUIntValid then
+        outText = FormatBinSmUInt(sv.exactUInt)
         return TRUE
       end if
-      if sv.exactInt64Valid then
-        outText = FormatSignedMagnitudeBase(sv.exactInt64, 2, asUnsigned)
+      if sv.exactIntValid then
+        outText = FormatSignedMagnitudeBase(sv.exactInt, 2, asUnsigned)
         return TRUE
       end if
       return FormatBinScalar(sv.scalar, outText, asUnsigned)
     case FB_RENDER_BASE_PLAIN_DEC
-      if sv.exactUInt64Valid then
-        outText = FormatPlainDecimalUInt64(sv.exactUInt64)
+      if sv.exactUIntValid then
+        outText = FormatPlainDecimalSmUInt(sv.exactUInt)
         return TRUE
       end if
-      if sv.exactInt64Valid then
-        outText = FormatSignedMagnitudeBase(sv.exactInt64, 10, asUnsigned)
+      if sv.exactIntValid then
+        outText = FormatSignedMagnitudeBase(sv.exactInt, 10, asUnsigned)
         return TRUE
       end if
-      dim ivDec as LongInt
-      if TryGetExactInt64FromDouble(sv.scalar, ivDec) = FALSE then return FALSE
+      dim ivDec as SmInt
+      if TryGetExactSmIntFromFloat(sv.scalar, ivDec) = FALSE then return FALSE
       outText = FormatSignedMagnitudeBase(ivDec, 10, asUnsigned)
       return TRUE
     case else
@@ -2960,7 +3046,7 @@ private function TryFormatScalarByRenderBase(byref sv as ScalarValue, byval rend
   end select
 end function
 
-'' Integer real & integer imaginary (exact or float-equal int64).
+'' Integer real & integer imaginary (exact or float-equal SmInt).
 private function TryFormatComplexScalarByRenderBase(byref sv as ScalarValue, byval renderBase as Integer, byval asUnsigned as Boolean, byref outText as String) as Boolean
   if Parser_SupportComplexNumbers = FALSE then return FALSE
   if ScalarHasNonzeroImaginaryPart(sv) = FALSE then return FALSE
@@ -2969,33 +3055,33 @@ private function TryFormatComplexScalarByRenderBase(byref sv as ScalarValue, byv
   dim svRe as ScalarValue
   svRe = sv
   ScalarClearImag(svRe)
-  '' A negative real part renders as signed magnitude, not via a two's-complement uint64 mirror.
-  if ScalarExactInt64Valid(svRe) andalso svRe.exactInt64 < 0 then ScalarSetExactUInt64Valid(svRe, FALSE)
+  '' A negative real part renders as signed magnitude, not via a two's-complement SmUInt mirror.
+  if ScalarExactSmIntValid(svRe) andalso svRe.exactInt < 0 then ScalarSetExactSmUIntValid(svRe, FALSE)
 
-  dim imI as LongInt
-  if ScalarImagExactInt64Valid(sv) then
-    imI = sv.imagExactInt64
-  elseif ScalarImagExactUInt64Valid(sv) then
-    if sv.imagExactUInt64 <= FB_I64_MAX_U then
-      imI = CLngInt(sv.imagExactUInt64)
+  dim imI as SmInt
+  if ScalarImagExactSmIntValid(sv) then
+    imI = sv.imagExactInt
+  elseif ScalarImagExactSmUIntValid(sv) then
+    if sv.imagExactUInt <= SM_INT_MAX_U then
+      imI = SmCInt(sv.imagExactUInt)
     else
       return FALSE
     end if
   else
-    dim ai as Double = sv.imag
-    if TryGetExactInt64FromDouble(ai, imI) = FALSE then return FALSE
+    dim ai as SmFloat = sv.imag
+    if TryGetExactSmIntFromFloat(ai, imI) = FALSE then return FALSE
   end if
 
   dim reStr as String
   if TryFormatScalarByRenderBase(svRe, renderBase, asUnsigned, reStr) = FALSE then return FALSE
 
-  dim absIm as LongInt
+  dim absIm as SmInt
   dim negI as Boolean
   if imI >= 0 then
     absIm = imI
     negI = FALSE
   else
-    if imI = FB_I64_MIN then return FALSE
+    if imI = SM_INT_MIN then return FALSE
     absIm = -imI
     negI = TRUE
   end if
@@ -3007,17 +3093,17 @@ private function TryFormatComplexScalarByRenderBase(byref sv as ScalarValue, byv
     tail = FB_STR_I
   else
     dim evMag as EvalValue
-    ValueSetInt64(evMag, absIm)
+    ValueSetSmInt(evMag, absIm)
     '' Imaginary coefficient stays signed magnitude; unsigned applies to the real part only.
     if TryFormatScalarByRenderBase(evMag.scalarValue, renderBase, FALSE, tail) = FALSE then return FALSE
     tail = tail & FB_STR_I
   end if
 
-  dim ar as Double = svRe.scalar
-  if svRe.exactInt64Valid andalso svRe.exactInt64 = 0 then
+  dim ar as SmFloat = svRe.scalar
+  if svRe.exactIntValid andalso svRe.exactInt = 0 then
     if negI then outText = "-" & tail else outText = tail
     return TRUE
-  elseif svRe.exactInt64Valid = FALSE andalso ar = 0.0 then
+  elseif svRe.exactIntValid = FALSE andalso ar = 0.0 then
     if negI then outText = "-" & tail else outText = tail
     return TRUE
   end if
@@ -3025,7 +3111,7 @@ private function TryFormatComplexScalarByRenderBase(byref sv as ScalarValue, byv
   return TRUE
 end function
 
-private function TryFormatScalarNonFiniteText(byval d as Double, byref outText as String) as Boolean
+private function TryFormatScalarNonFiniteText(byval d as SmFloat, byref outText as String) as Boolean
   if IsNaNValue(d) then
     outText = "nan"
     return TRUE
@@ -3043,27 +3129,52 @@ end function
 
 private function TextHasDecimalOrExponent(byref s as String) as Boolean
   dim i as Integer
-  for i = 1 to len(s)
-    dim c as String = mid(s, i, 1)
-    if c = "." orelse c = "e" orelse c = "E" then return TRUE
+  for i = 0 to len(s) - 1
+    dim c as UByte = s[i]
+    if c = 46 orelse c = 101 orelse c = 69 then return TRUE  '' "." "e" "E"
   next i
   return FALSE
 end function
 
-'' 16 significant digits, trailing mantissa zeros removed, exponent at least 3 digits.
-private function FormatScientific16(byval d as Double) as String
+'' TRUE when digits10 significant digits already round-trip (1e23 prints as 1e+023, not 9.999999999999999e+022).
+'' Never uses 17 digits (0.1+0.2 keeps printing 0.3). The band [10^digits10, 10^(digits10+1)) keeps the wider form,
+'' so the general format's fixed/exponent choice does not change.
+private function FloatRoundTripsAtShortDigits(byval d as SmFloat) as Boolean
+  dim a as SmFloat = abs(d)
+  if a >= SM_FLOAT_DISPLAY_BAND_LOW andalso a < SM_FLOAT_DISPLAY_BAND_HIGH then return FALSE
   dim buf as zstring * 64
-  if sprintf(@buf, FB_STR_FMT_SCIENTIFIC_16, d) < 0 then return "0"
+  if sprintf(@buf, SM_FMT_SCIENTIFIC_SHORT, d) < 0 then return FALSE
+  return (cast(SmFloat, strtod(@buf, NULL)) = d)
+end function
+
+'' Pads the exponent of a printf %g/%e text to at least 3 digits (e+23 -> e+023).
+private function PadPrintfExponentDigits(byref s as String) as String
+  dim ePos as Integer = instr(s, "e")
+  if ePos = 0 then return s
+  dim mant as String = left(s, ePos - 1)
+  dim expPart as String = mid(s, ePos + 1)
+  dim expSign as String = "+"
+  if left(expPart, 1) = "-" then
+    expSign = "-"
+    expPart = mid(expPart, 2)
+  elseif left(expPart, 1) = "+" then
+    expPart = mid(expPart, 2)
+  end if
+  while len(expPart) < 3
+    expPart = "0" & expPart
+  wend
+  return mant & "e" & expSign & expPart
+end function
+
+'' 16 significant digits, trailing mantissa zeros removed, exponent at least 3 digits.
+private function FormatScientificFull(byval d as SmFloat) as String
+  dim buf as zstring * 64
+  dim fmtSci as String = SM_FMT_SCIENTIFIC_FULL
+  if FloatRoundTripsAtShortDigits(d) then fmtSci = SM_FMT_SCIENTIFIC_SHORT
+  if sprintf(@buf, fmtSci, d) < 0 then return "0"
   dim s as String = buf
-  dim ePos as Integer = 0
-  dim i as Integer
-  for i = 1 to len(s)
-    dim c as String = mid(s, i, 1)
-    if c = "e" orelse c = "E" then
-      ePos = i
-      exit for
-    end if
-  next i
+  dim ePos as Integer = instr(s, "e")
+  if ePos = 0 then ePos = instr(s, "E")
   if ePos = 0 then return s
   dim mant as String = left(s, ePos - 1)
   dim expPart as String = mid(s, ePos + 1)
@@ -3090,34 +3201,41 @@ private function FormatScientific16(byval d as Double) as String
 end function
 
 '' Non-exact float text. General form with no fraction: ".0" at or below 2^53, scientific above it.
-private function FormatInexactDoubleText(byval d as Double) as String
+private function FormatInexactFloatText(byval d as SmFloat) as String
   dim nf as String
   if TryFormatScalarNonFiniteText(d, nf) then return nf
   if d = 0.0 then return "0"
-  dim s as String = ltrim(str(d))
+  dim s as String
+  if FloatRoundTripsAtShortDigits(d) then
+    dim gbuf as zstring * 64
+    if sprintf(@gbuf, SM_FMT_GENERAL_SHORT, d) < 0 then return "0"
+    s = PadPrintfExponentDigits(gbuf)
+  else
+    s = ltrim(str(d))
+  end if
   if TextHasDecimalOrExponent(s) then return s
-  if abs(d) > FB_MAX_EXACT_INT_FROM_DOUBLE then return FormatScientific16(d)
+  if abs(d) > SM_MAX_EXACT_INT_FROM_FLOAT then return FormatScientificFull(d)
   return s & FB_STR_EXPLICIT_FLOAT_FRAC
 end function
 
-private function FormatIntPowerParts(byval baseV as LongInt, byval expV as ULongInt) as String
-  if expV <= 1ull then return ltrim(str(baseV))
+private function FormatIntPowerParts(byval baseV as SmInt, byval expV as SmUInt) as String
+  if expV <= SmCUInt(1) then return ltrim(str(baseV))
   return ltrim(str(baseV)) & FB_STR_DOUBLE_ASTERISK & ltrim(str(expV))
 end function
 
 private function TryFormatIntPowerScalar(byref sv as ScalarValue, byref outText as String) as Boolean
   if (sv.flags and SVF_RENDER_INT_POWER) = 0 then return FALSE
-  if sv.imagExactUInt64 <= 1ull then return FALSE
-  outText = FormatIntPowerParts(sv.imagExactInt64, sv.imagExactUInt64)
+  if sv.imagExactUInt <= SmCUInt(1) then return FALSE
+  outText = FormatIntPowerParts(sv.imagExactInt, sv.imagExactUInt)
   return TRUE
 end function
 
 private function FormatScalarExactOrFloatText(byref sv as ScalarValue) as String
   dim powText as String
   if TryFormatIntPowerScalar(sv, powText) then return powText
-  if sv.exactInt64Valid then return ltrim(str(sv.exactInt64))
-  if sv.exactUInt64Valid then return ltrim(ULongIntToString(sv.exactUInt64))
-  return FormatInexactDoubleText(sv.scalar)
+  if sv.exactIntValid then return ltrim(str(sv.exactInt))
+  if sv.exactUIntValid then return ltrim(SmUIntToString(sv.exactUInt))
+  return FormatInexactFloatText(sv.scalar)
 end function
 
 private function FormatScalarRealPartPlain(byref sv as ScalarValue) as String
@@ -3126,7 +3244,7 @@ private function FormatScalarRealPartPlain(byref sv as ScalarValue) as String
   return FormatScalarExactOrFloatText(sv)
 end function
 
-private function FormatRationalParts(byval num as LongInt, byval den as ULongInt) as String
+private function FormatRationalParts(byval num as SmInt, byval den as SmUInt) as String
   if num = 0 then return "0"
   if den = 1 then return ltrim(str(num))
   return ltrim(str(num)) & "/" & ltrim(str(den))
@@ -3134,8 +3252,8 @@ end function
 
 private function TryFormatRationalScalar(byref sv as ScalarValue, byref outText as String) as Boolean
   if ScalarHasRenderRational(sv) = FALSE then return FALSE
-  dim num as LongInt = sv.exactInt64
-  dim den as ULongInt = sv.exactUInt64
+  dim num as SmInt = sv.exactInt
+  dim den as SmUInt = sv.exactUInt
   if den = 0 then return FALSE
   if num = 0 then
     outText = "0"
@@ -3151,31 +3269,31 @@ end function
 
 private function TryFormatComplexRationalScalar(byref sv as ScalarValue, byref outText as String) as Boolean
   if (sv.flags and (SVF_RENDER_RATIONAL or SVF_IMAG_RENDER_RATIONAL)) = 0 _
-     andalso ScalarImagExactInt64Valid(sv) = FALSE then
+     andalso ScalarImagExactSmIntValid(sv) = FALSE then
     return FALSE
   end if
   dim rePart as String = ""
   if (sv.flags and SVF_RENDER_RATIONAL) <> 0 then
-    rePart = FormatRationalParts(sv.exactInt64, sv.exactUInt64)
-  elseif sv.exactInt64Valid then
-    if sv.exactInt64 <> 0 then rePart = ltrim(str(sv.exactInt64))
+    rePart = FormatRationalParts(sv.exactInt, sv.exactUInt)
+  elseif sv.exactIntValid then
+    if sv.exactInt <> 0 then rePart = ltrim(str(sv.exactInt))
   elseif sv.scalar <> 0.0 then
     return FALSE
   end if
   dim imTail as String = ""
   if (sv.flags and SVF_IMAG_RENDER_RATIONAL) <> 0 then
-    dim rp as String = FormatRationalParts(sv.imagExactInt64, sv.imagExactUInt64)
-    if sv.imagExactUInt64 > 1 then
+    dim rp as String = FormatRationalParts(sv.imagExactInt, sv.imagExactUInt)
+    if sv.imagExactUInt > 1 then
       imTail = rp & "*i"
-    elseif sv.imagExactInt64 = 1 then
+    elseif sv.imagExactInt = 1 then
       imTail = FB_STR_I
-    elseif sv.imagExactInt64 = -1 then
+    elseif sv.imagExactInt = -1 then
       imTail = "-" & FB_STR_I
     else
       imTail = rp & FB_STR_I
     end if
-  elseif ScalarImagExactInt64Valid(sv) then
-    dim ni as LongInt = sv.imagExactInt64
+  elseif ScalarImagExactSmIntValid(sv) then
+    dim ni as SmInt = sv.imagExactInt
     if ni = 1 then
       imTail = FB_STR_I
     elseif ni = -1 then
@@ -3203,26 +3321,26 @@ private function TryFormatComplexRationalScalar(byref sv as ScalarValue, byref o
   return TRUE
 end function
 
-private function FormatComplexImagCoeffTail(byval ai as Double, byref negUnit as Boolean) as String
+private function FormatComplexImagCoeffTail(byval ai as SmFloat, byref negUnit as Boolean) as String
   negUnit = FALSE
   if IsNaNValue(ai) then return "nan*" & FB_STR_I
   if IsInfValue(ai) then
     if ai < 0.0 then return "-" & FB_STR_INF & "*" & FB_STR_I
     return FB_STR_INF & "*" & FB_STR_I
   end if
-  dim coeffAbs as Double = abs(ai)
+  dim coeffAbs as SmFloat = abs(ai)
   if coeffAbs = 1.0 then
     if ai < 0.0 then negUnit = TRUE
     return FB_STR_I
   end if
-  if ai < 0.0 then return "-" & FormatInexactDoubleText(coeffAbs) & FB_STR_I
-  return FormatInexactDoubleText(coeffAbs) & FB_STR_I
+  if ai < 0.0 then return "-" & FormatInexactFloatText(coeffAbs) & FB_STR_I
+  return FormatInexactFloatText(coeffAbs) & FB_STR_I
 end function
 
 private function FormatComplexImagCoeffTailFromScalar(byref sv as ScalarValue, byref negUnit as Boolean) as String
   negUnit = FALSE
-  if ScalarImagExactInt64Valid(sv) then
-    dim ni as LongInt = sv.imagExactInt64
+  if ScalarImagExactSmIntValid(sv) then
+    dim ni as SmInt = sv.imagExactInt
     if ni = 1 then
       return FB_STR_I
     elseif ni = -1 then
@@ -3231,14 +3349,14 @@ private function FormatComplexImagCoeffTailFromScalar(byref sv as ScalarValue, b
     elseif ni <> 0 then
       return ltrim(str(ni)) & FB_STR_I
     end if
-  elseif ScalarImagExactUInt64Valid(sv) andalso sv.imagExactUInt64 <= FB_I64_MAX_U then
-    dim ui as LongInt = CLngInt(sv.imagExactUInt64)
+  elseif ScalarImagExactSmUIntValid(sv) andalso sv.imagExactUInt <= SM_INT_MAX_U then
+    dim ui as SmInt = SmCInt(sv.imagExactUInt)
     if ui = 1 then return FB_STR_I
     if ui = -1 then negUnit = TRUE: return FB_STR_I
     return ltrim(str(ui)) & FB_STR_I
   end if
-  dim ar as Double
-  dim ai as Double
+  dim ar as SmFloat
+  dim ai as SmFloat
   ScalarLoadCartesian(sv, ar, ai)
   return FormatComplexImagCoeffTail(ai, negUnit)
 end function
@@ -3266,7 +3384,7 @@ end function
 private function FormatComplexScalarValue(byref sv as ScalarValue) as String
   dim ratCx as String
   if TryFormatComplexRationalScalar(sv, ratCx) then return ratCx
-  dim ar as Double, ai as Double
+  dim ar as SmFloat, ai as SmFloat
   ScalarLoadCartesian(sv, ar, ai)
   if IsNaNValue(ar) orelse IsNaNValue(ai) then return "nan"
   dim rePart as String = FormatScalarRealPartPlain(sv)
@@ -3275,9 +3393,9 @@ private function FormatComplexScalarValue(byref sv as ScalarValue) as String
   dim tail as String = FormatComplexImagCoeffTailFromScalar(sv, negUnit)
 
   dim reZero as Boolean = FALSE
-  if sv.exactInt64Valid andalso sv.exactInt64 = 0 then
+  if sv.exactIntValid andalso sv.exactInt = 0 then
     reZero = TRUE
-  elseif sv.exactInt64Valid = FALSE andalso ar = 0.0 then
+  elseif sv.exactIntValid = FALSE andalso ar = 0.0 then
     reZero = TRUE
   end if
 
@@ -3568,9 +3686,30 @@ private function TryGetConstant(byref n as String, byref v as EvalValue) as Bool
   return TRUE
 end function
 
+private sub EnsureVariableCapacity(byval need as Integer)
+  if need <= variableCap then exit sub
+  dim newCap as Integer = variableCap
+  if newCap <= 0 then newCap = 8
+  while newCap < need
+    newCap *= 2
+  wend
+  if variableCap <= 0 then
+    redim variables(0 to newCap - 1)
+  else
+    redim preserve variables(0 to newCap - 1)
+  end if
+  variableCap = newCap
+end sub
+
+private sub ClearVariables()
+  erase variables
+  variableCount = 0
+  variableCap = 0
+end sub
+
 private function FindVariableIndex(byref n as String) as Integer
   dim i as Integer
-  for i = lbound(variables) to ubound(variables)
+  for i = 0 to variableCount - 1
     if variables(i).name = n then return i
   next i
   return -1
@@ -3581,7 +3720,7 @@ private function TryGetFunctionVariableOverride(byref n as String, byref v as Ev
   dim i as Integer
   for i = functionVariableCount - 1 to 0 step -1
     if functionVariableNames(i) = n then
-      ValueSetInt64(v, 0)
+      ValueSetSmInt(v, 0)
       return TRUE
     end if
   next i
@@ -3593,9 +3732,9 @@ private function GetVariable(byref n as String, byref v as EvalValue) as Boolean
 #ifdef __FB_FUNC_VARS_OVERRIDE_GLOBALS__
   if TryGetFunctionVariableOverride(n, v) then return TRUE
 #endif
-  if lcase(n) = FB_STR_ANS then
+  if IsAnsNameText(n) then
     dim j as Integer
-    for j = lbound(variables) to ubound(variables)
+    for j = 0 to variableCount - 1
       if variables(j).name = FB_STR_ANS then
         v = variables(j).value
         return TRUE
@@ -3604,7 +3743,7 @@ private function GetVariable(byref n as String, byref v as EvalValue) as Boolean
     return FALSE
   end if
   dim i as Integer
-  for i = lbound(variables) to ubound(variables)
+  for i = 0 to variableCount - 1
     if variables(i).name = n then
       v = variables(i).value
       return TRUE
@@ -3615,32 +3754,29 @@ end function
 
 private sub SetVariable(byref n as String, byref v as EvalValue)
   dim i as Integer
-  for i = lbound(variables) to ubound(variables)
+  for i = 0 to variableCount - 1
     if variables(i).name = n then
       variables(i).value = v
       exit sub
     end if
   next i
-  if ubound(variables) = -1 then
-    redim variables(0)
-  else
-    redim preserve variables(ubound(variables) + 1)
-  end if
-  variables(ubound(variables)).name = n
-  variables(ubound(variables)).value = v
+  EnsureVariableCapacity(variableCount + 1)
+  variables(variableCount).name = n
+  variables(variableCount).value = v
+  variableCount += 1
 end sub
 
 private sub RemoveVariableAtIndex(byval vIdx as Integer)
-  if vIdx < lbound(variables) orelse vIdx > ubound(variables) then exit sub
-  if ubound(variables) = lbound(variables) then
-    erase variables
+  if vIdx < 0 orelse vIdx >= variableCount then exit sub
+  if variableCount = 1 then
+    ClearVariables()
     exit sub
   end if
   dim j as Integer
-  for j = vIdx to ubound(variables) - 1
+  for j = vIdx to variableCount - 2
     variables(j) = variables(j + 1)
   next j
-  redim preserve variables(lbound(variables) to ubound(variables) - 1)
+  variableCount -= 1
 end sub
 
 private sub RemoveVariableByName(byref n as String)
@@ -3648,9 +3784,30 @@ private sub RemoveVariableByName(byref n as String)
   if idx >= 0 then RemoveVariableAtIndex(idx)
 end sub
 
+private sub EnsureUserFunctionCapacity(byval need as Integer)
+  if need <= userFunctionCap then exit sub
+  dim newCap as Integer = userFunctionCap
+  if newCap <= 0 then newCap = 8
+  while newCap < need
+    newCap *= 2
+  wend
+  if userFunctionCap <= 0 then
+    redim userFunctions(0 to newCap - 1)
+  else
+    redim preserve userFunctions(0 to newCap - 1)
+  end if
+  userFunctionCap = newCap
+end sub
+
+private sub ClearUserFunctions()
+  erase userFunctions
+  userFunctionCount = 0
+  userFunctionCap = 0
+end sub
+
 private function FindFunctionIndex(byref n as String) as Integer
   dim i as Integer
-  for i = lbound(userFunctions) to ubound(userFunctions)
+  for i = 0 to userFunctionCount - 1
     if userFunctions(i).name = n then return i
   next i
   return -1
@@ -3674,16 +3831,16 @@ private function FormatUserFunctionSignature(byval fnIdx as Integer) as String
 end function
 
 private sub RemoveUserFunctionAtIndex(byval fnIdx as Integer)
-  if fnIdx < lbound(userFunctions) orelse fnIdx > ubound(userFunctions) then exit sub
-  if ubound(userFunctions) = lbound(userFunctions) then
-    erase userFunctions
+  if fnIdx < 0 orelse fnIdx >= userFunctionCount then exit sub
+  if userFunctionCount = 1 then
+    ClearUserFunctions()
     exit sub
   end if
   dim j as Integer
-  for j = fnIdx to ubound(userFunctions) - 1
+  for j = fnIdx to userFunctionCount - 2
     userFunctions(j) = userFunctions(j + 1)
   next j
-  redim preserve userFunctions(lbound(userFunctions) to ubound(userFunctions) - 1)
+  userFunctionCount -= 1
 end sub
 
 private sub RemoveUserFunctionByName(byref n as String)
@@ -3773,12 +3930,9 @@ private sub SetUserFunction(byref n as String, params() as String, byref expr as
   RemoveVariableByName(n)
   dim idx as Integer = FindFunctionIndex(n)
   if idx < 0 then
-    if ubound(userFunctions) = -1 then
-      redim userFunctions(0)
-    else
-      redim preserve userFunctions(ubound(userFunctions) + 1)
-    end if
-    idx = ubound(userFunctions)
+    EnsureUserFunctionCapacity(userFunctionCount + 1)
+    idx = userFunctionCount
+    userFunctionCount += 1
   end if
 
   userFunctions(idx).name = n
@@ -3806,7 +3960,7 @@ declare function ParseBitwiseAnd() as EvalValue
 declare function ParseShift() as EvalValue
 declare function ParseAdditive() as EvalValue
 declare function ParseMultiplicative() as EvalValue
-declare function ParseLeftAssocBinary(byval kind as Integer, byval int64LevelId as Integer) as EvalValue
+declare function ParseLeftAssocBinary(byval kind as Integer, byval intLevelId as Integer) as EvalValue
 declare function ParseUnary() as EvalValue
 declare function ParsePostfixPercent() as EvalValue
 declare function ParsePower() as EvalValue
@@ -4050,7 +4204,7 @@ private function TrySetIncompleteOpenedFunctionCallHint(byref fnName as String) 
     return TryEmitBareBuiltinOrUdfTailHint(fnHint, TRUE, -1, FALSE)
   end if
   dim udfIdx as Integer = -1
-  if lbound(userFunctions) <= ubound(userFunctions) then udfIdx = FindFunctionIndex(fnName)
+  if userFunctionCount > 0 then udfIdx = FindFunctionIndex(fnName)
   if udfIdx >= 0 then
     return TryEmitBareBuiltinOrUdfTailHint(fnHint, FALSE, udfIdx, FALSE)
   end if
@@ -4069,7 +4223,7 @@ private function TryHandleUnknownIdentifier(byref nam as String, byref outV as E
     return FALSE
   end if
   dim udfIdx as Integer = -1
-  if lbound(userFunctions) <= ubound(userFunctions) then udfIdx = FindFunctionIndex(nam)
+  if userFunctionCount > 0 then udfIdx = FindFunctionIndex(nam)
   if udfIdx >= 0 then
     dim suppressUdfTailHint as Boolean = FALSE
     if (udfCallStackSp > 0 andalso udfCallStack(udfCallStackSp - 1) = lowNam) _
@@ -4080,7 +4234,7 @@ private function TryHandleUnknownIdentifier(byref nam as String, byref outV as E
     return FALSE
   end if
   if syntaxCheckDepth = 0 then AppendUniqueName(unknownVarsText, nam)
-  ValueSetInt64(outV, 0)
+  ValueSetSmInt(outV, 0)
   canIndex = FALSE
   return TRUE
 end function
@@ -4183,25 +4337,25 @@ private sub SetTooManyValuesError(byref fnName as String)
 end sub
 
 ' CPython-style length of range(start, stop, step) using unsigned wraparound arithmetic.
-private function EstimateRangeItemCount(byval startV as LongInt, byval stopV as LongInt, byval stepV as LongInt) as ULongInt
-  dim uLo as ULongInt, uHi as ULongInt, uStep as ULongInt
+private function EstimateRangeItemCount(byval startV as SmInt, byval stopV as SmInt, byval stepV as SmInt) as SmUInt
+  dim uLo as SmUInt, uHi as SmUInt, uStep as SmUInt
   if stepV > 0 then
-    if startV >= stopV then return 0ull
-    uLo = CULngInt(startV)
-    uHi = CULngInt(stopV)
-    uStep = CULngInt(stepV)
+    if startV >= stopV then return SmCUInt(0)
+    uLo = SmCUInt(startV)
+    uHi = SmCUInt(stopV)
+    uStep = SmCUInt(stepV)
   else
-    if startV <= stopV then return 0ull
-    uLo = CULngInt(stopV)
-    uHi = CULngInt(startV)
-    uStep = 0ull - CULngInt(stepV)
+    if startV <= stopV then return SmCUInt(0)
+    uLo = SmCUInt(stopV)
+    uHi = SmCUInt(startV)
+    uStep = SmCUInt(0) - SmCUInt(stepV)
   end if
-  return (uHi - uLo - 1ull) \ uStep + 1ull
+  return (uHi - uLo - SmCUInt(1)) \ uStep + SmCUInt(1)
 end function
 
 ' Returns TRUE when count is within limit; FALSE sets too-many-values error.
-private function AcceptProducedItemCount(byref fnName as String, byval count as ULongInt) as Boolean
-  if count > CULngInt(BUILTIN_MAX_PRODUCED_ITEMS) then
+private function AcceptProducedItemCount(byref fnName as String, byval count as SmUInt) as Boolean
+  if count > SmCUInt(BUILTIN_MAX_PRODUCED_ITEMS) then
     SetTooManyValuesError(fnName)
     return FALSE
   end if
@@ -4218,7 +4372,7 @@ private sub SetBinaryBuiltinBroadcastFailure(byref fnName as String, byref leftV
     SetIntegerValuesError(fnName)
   elseif (pairStatus = 3) orelse EvalValuesHaveMismatchedArrayLengths(leftV, rightV) then
     SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
-  elseif parseError = 0 then
+  elseif parseError = FALSE then
     SetNumericErrorInFunction(fnName)
   end if
 end sub
@@ -4252,17 +4406,21 @@ private function EvalValueInvolvesTime(byref v as EvalValue) as Boolean
   return ScalarIsTime(v.scalarValue)
 end function
 
-private function SecondsFieldToMsRounded(byval wholeSec as LongInt, byref fracDigits as String) as LongInt
-  dim d as Double = CDbl(wholeSec)
+'' FALSE when the seconds field in milliseconds does not fit SmInt (1:9300000000000000 must not wrap to 0).
+private function TrySecondsFieldToMsRounded(byval wholeSec as SmInt, byref fracDigits as String, byref outMs as SmInt) as Boolean
+  dim d as SmFloat = SmCFloat(wholeSec)
   if len(fracDigits) > 0 then
-    dim fd as Double = val("0." & fracDigits)
-    if IsNonFiniteValue(fd) then return 0
+    dim fd as SmFloat = val("0." & fracDigits)
+    if IsNonFiniteValue(fd) then
+      outMs = 0
+      return TRUE
+    end if
     d += fd
   end if
-  return RoundHalfUpDoubleToLongInt(d * 1000.0)
+  return TryRoundHalfUpFloatToSmInt(d * 1000.0, outMs)
 end function
 
-private function ParseTimeLiteralStringToMs(byref lit as String, byref outMs as LongInt) as Boolean
+private function ParseTimeLiteralStringToMs(byref lit as String, byref outMs as SmInt) as Boolean
   dim n as Integer = len(lit)
   if n <= 0 then return FALSE
   dim colonPos() as Integer
@@ -4287,8 +4445,8 @@ private function ParseTimeLiteralStringToMs(byref lit as String, byref outMs as 
 
   dim getSegStart as Integer = 1
   dim si as Integer
-  dim d as LongInt, h as LongInt, m as LongInt
-  dim lastWhole as LongInt
+  dim d as SmInt, h as SmInt, m as SmInt
+  dim lastWhole as SmInt
   dim fracPart as String = ""
   dim dotPos as Integer = 0
   dim segStr as String
@@ -4330,23 +4488,23 @@ private function ParseTimeLiteralStringToMs(byref lit as String, byref outMs as 
         return FALSE
       end if
     next j
-    dim uv as ULongInt = 0
+    dim uv as SmUInt = 0
     for j = 1 to len(segStr)
       dim dig as Integer = asc(mid(segStr, j, 1)) - CHAR_DIGIT_0
       if TryMult10OnceChecked(uv, uv) = FALSE then
         SetTimeLiteralInvalidSegmentError()
         return FALSE
       end if
-      if TryAddULongChecked(uv, CULngInt(dig), uv) = FALSE then
+      if TryAddSmUIntChecked(uv, SmCUInt(dig), uv) = FALSE then
         SetTimeLiteralInvalidSegmentError()
         return FALSE
       end if
     next j
-    if uv > 9223372036854775807ull then
+    if uv > SM_INT_MAX_U then
       SetTimeLiteralInvalidSegmentError()
       return FALSE
     end if
-    lastWhole = CLngInt(uv)
+    lastWhole = SmCInt(uv)
     if si < segCount then
       select case segCount
         case 2
@@ -4373,15 +4531,19 @@ private function ParseTimeLiteralStringToMs(byref lit as String, byref outMs as 
     next i
   end if
 
-  dim secMs as LongInt = SecondsFieldToMsRounded(lastWhole, fracPart)
-  dim t as Double
+  dim secMs as SmInt
+  if TrySecondsFieldToMsRounded(lastWhole, fracPart, secMs) = FALSE then
+    SetTimeLiteralInvalidSegmentError()
+    return FALSE
+  end if
+  dim t as SmFloat
   select case segCount
     case 2
-      t = CDbl(m) * 60000.0 + CDbl(secMs)
+      t = SmCFloat(m) * 60000.0 + SmCFloat(secMs)
     case 3
-      t = (CDbl(h) * 3600.0 + CDbl(m) * 60.0) * 1000.0 + CDbl(secMs)
+      t = (SmCFloat(h) * 3600.0 + SmCFloat(m) * 60.0) * 1000.0 + SmCFloat(secMs)
     case 4
-      t = ((CDbl(d) * 24.0 + CDbl(h)) * 3600.0 + CDbl(m) * 60.0) * 1000.0 + CDbl(secMs)
+      t = ((SmCFloat(d) * 24.0 + SmCFloat(h)) * 3600.0 + SmCFloat(m) * 60.0) * 1000.0 + SmCFloat(secMs)
     case else
       SetTimeLiteralInvalidSegmentError()
       return FALSE
@@ -4390,19 +4552,19 @@ private function ParseTimeLiteralStringToMs(byref lit as String, byref outMs as 
     SetTimeLiteralInvalidSegmentError()
     return FALSE
   end if
-  if TryRoundHalfUpDoubleToLongInt(t, outMs) = FALSE then
+  if TryRoundHalfUpFloatToSmInt(t, outMs) = FALSE then
     SetTimeLiteralInvalidSegmentError()
     return FALSE
   end if
   return TRUE
 end function
 
-private function TryProductCoeffUnitMs(byval coeff as LongInt, byval factor as LongInt, byref outDelta as LongInt) as Boolean
+private function TryProductCoeffUnitMs(byval coeff as SmInt, byval factor as SmInt, byref outDelta as SmInt) as Boolean
   if coeff = 0 orelse factor = 0 then
     outDelta = 0
     return TRUE
   end if
-  if coeff > (FB_I64_MAX \ factor) then return FALSE
+  if coeff > (SM_INT_MAX \ factor) then return FALSE
   outDelta = coeff * factor
   return TRUE
 end function
@@ -4485,12 +4647,13 @@ private function TryParseCompactSuffixTimeLiteral(byref outV as EvalValue) as Bo
   dim pSave as ZString ptr = pStream
   if pStream[0] < CHAR_DIGIT_0 orelse pStream[0] > CHAR_DIGIT_9 then return FALSE
   if IsDecimalRadixPrefixedAt(pStream) then return FALSE
-  dim totalMs as LongInt = 0
+  dim totalMs as SmInt = 0
   dim lastUnitRank as Integer = -1
   dim comps as Integer = 0
+  dim lastUnitStart as ZString ptr = pStream
   do
     if pStream[0] < CHAR_DIGIT_0 orelse pStream[0] > CHAR_DIGIT_9 then exit do
-    dim uv as ULongInt = 0
+    dim uv as SmUInt = 0
     while pStream[0] >= CHAR_DIGIT_0 andalso pStream[0] <= CHAR_DIGIT_9
       dim dg as Integer = pStream[0] - CHAR_DIGIT_0
       if TryMult10OnceChecked(uv, uv) = FALSE then
@@ -4498,7 +4661,7 @@ private function TryParseCompactSuffixTimeLiteral(byref outV as EvalValue) as Bo
         if comps > 0 then SetTimeLiteralInvalidSegmentError()
         return FALSE
       end if
-      if TryAddULongChecked(uv, CULngInt(dg), uv) = FALSE then
+      if TryAddSmUIntChecked(uv, SmCUInt(dg), uv) = FALSE then
         pStream = pSave
         if comps > 0 then SetTimeLiteralInvalidSegmentError()
         return FALSE
@@ -4506,8 +4669,9 @@ private function TryParseCompactSuffixTimeLiteral(byref outV as EvalValue) as Bo
       pStream += 1
     wend
     SkipSpaces()
+    lastUnitStart = pStream
     dim ur as Integer = -1
-    dim fac as LongInt = 0
+    dim fac as SmInt = 0
     if pStream[0] = CHAR_LC_M andalso pStream[1] = CHAR_LC_S then
       ur = 4
       fac = 1
@@ -4543,13 +4707,13 @@ private function TryParseCompactSuffixTimeLiteral(byref outV as EvalValue) as Bo
       return FALSE
     end if
     lastUnitRank = ur
-    if uv > FB_I64_MAX_U then
+    if uv > SM_INT_MAX_U then
       pStream = pSave
       SetTimeLiteralInvalidSegmentError()
       return FALSE
     end if
-    dim cf as LongInt = CLngInt(uv)
-    dim dlt as LongInt
+    dim cf as SmInt = SmCInt(uv)
+    dim dlt as SmInt
     if TryProductCoeffUnitMs(cf, fac, dlt) = FALSE then
       pStream = pSave
       SetTimeLiteralInvalidSegmentError()
@@ -4574,8 +4738,15 @@ private function TryParseCompactSuffixTimeLiteral(byref outV as EvalValue) as Bo
       PeekMatchKeywordOperatorNoConsume(OpName(OP_OR)) orelse _
       PeekMatchKeywordOperatorNoConsume(OpName(OP_NOT))
     if kwOk = FALSE then
+      ' A spelled-out unit constant (1day, 2 hour) keeps the specific hint. Any other word (2 sin(1), 2 min(1,2))
+      ' is not a time literal: rewind so the generic parser reports it.
+      pStream = lastUnitStart
+      dim unitWord as Boolean = PeekMatchKeywordOperatorNoConsume(FB_STR_SECOND) orelse _
+        PeekMatchKeywordOperatorNoConsume(FB_STR_MINUTE) orelse _
+        PeekMatchKeywordOperatorNoConsume(FB_STR_HOUR) orelse _
+        PeekMatchKeywordOperatorNoConsume(FB_STR_DAY)
       pStream = pSave
-      SetParseError(FB_STR_TIME_COMPACT_INVALID_SUFFIX)
+      if unitWord then SetParseError(FB_STR_TIME_COMPACT_INVALID_SUFFIX)
       return FALSE
     end if
   end if
@@ -4592,7 +4763,7 @@ private function TryParseScalarTimeLiteral(byref outV as EvalValue) as Boolean
   dim litLen as Integer = CInt(q - p0)
   if litLen <= 0 then return FALSE
   dim lit as String = left(*p0, litLen)
-  dim ms as LongInt = 0
+  dim ms as SmInt = 0
   if ParseTimeLiteralStringToMs(lit, ms) = FALSE then
     return FALSE
   end if
@@ -4601,16 +4772,16 @@ private function TryParseScalarTimeLiteral(byref outV as EvalValue) as Boolean
   return TRUE
 end function
 
-private function ScalarToSecondsMsForTimeOp(byref sv as ScalarValue, byref outMs as LongInt) as Boolean
+private function ScalarToSecondsMsForTimeOp(byref sv as ScalarValue, byref outMs as SmInt) as Boolean
   if ScalarIsTime(sv) then
     outMs = TimeTotalMsFromScalarValue(sv)
     return TRUE
   end if
   if IsNaNValue(sv.scalar) then return FALSE
-  dim ms as Double = sv.scalar * 1000.0
-  if TryRoundHalfUpDoubleToLongInt(ms, outMs) then return TRUE
+  dim ms as SmFloat = sv.scalar * 1000.0
+  if TryRoundHalfUpFloatToSmInt(ms, outMs) then return TRUE
   '' Saturate so ordering against time values (always in range) stays correct.
-  outMs = IIf(ms > 0, FB_I64_MAX, FB_I64_MIN)
+  outMs = IIf(ms > 0, SM_INT_MAX, SM_INT_MIN)
   return TRUE
 end function
 
@@ -4657,7 +4828,7 @@ private function TryValidateAssignmentTargetName(byref varName as String, byref 
   return TryValidateIdentifierIsNotReserved(varName, errText)
 end function
 
-private function TryGetArrayIndexIntFromEvalValue(byref idxValue as EvalValue, byref outIdx as LongInt, byval setError as Boolean = TRUE) as Boolean
+private function TryGetArrayIndexIntFromEvalValue(byref idxValue as EvalValue, byref outIdx as SmInt, byval setError as Boolean = TRUE) as Boolean
   if idxValue.kind <> VK_SCALAR then
     if setError then SetParseErrorById(PARSE_ERR_ARRAY_INDEX_MUST_BE_SCALAR)
     return FALSE
@@ -4669,15 +4840,15 @@ private function TryGetArrayIndexIntFromEvalValue(byref idxValue as EvalValue, b
     return FALSE
   end if
   select case sv.scalarStorageKind
-  case SSK_INT64
-    outIdx = sv.exactInt64
+  case SSK_SMINT
+    outIdx = sv.exactInt
     return TRUE
-  case SSK_UINT64
-    if sv.exactUInt64 > FB_I64_MAX_U then
+  case SSK_SMUINT
+    if sv.exactUInt > SM_INT_MAX_U then
       if setError then SetParseErrorById(PARSE_ERR_ARRAY_INDEX_OUT_OF_RANGE)
       return FALSE
     end if
-    outIdx = CLngInt(sv.exactUInt64)
+    outIdx = SmCInt(sv.exactUInt)
     return TRUE
   case else
     if setError then SetParseErrorById(PARSE_ERR_ARRAY_INDEX_MUST_BE_INTEGER)
@@ -4697,15 +4868,15 @@ end sub
 
 ' CPython slice.indices(length) normalization for start/stop/step.
 private sub NormalizePythonSliceBounds( _
-  byval length as LongInt, _
-  byval hasStart as Boolean, byval startIn as LongInt, _
-  byval hasStop as Boolean, byval stopIn as LongInt, _
-  byval stepIn as LongInt, _
-  byref outStart as LongInt, byref outStop as LongInt _
+  byval length as SmInt, _
+  byval hasStart as Boolean, byval startIn as SmInt, _
+  byval hasStop as Boolean, byval stopIn as SmInt, _
+  byval stepIn as SmInt, _
+  byref outStart as SmInt, byref outStop as SmInt _
 )
   dim stepNeg as Boolean = (stepIn < 0)
-  dim startIdx as LongInt
-  dim stopIdx as LongInt
+  dim startIdx as SmInt
+  dim stopIdx as SmInt
   if hasStart = FALSE then
     if stepNeg then startIdx = length - 1 else startIdx = 0
   else
@@ -4733,21 +4904,21 @@ private sub NormalizePythonSliceBounds( _
 end sub
 
 '' stepV is not zero. Start and stop are already normalized into a range that fits in signed 64-bit.
-private function EstimateSliceItemCount(byval startV as LongInt, byval stopV as LongInt, byval stepV as LongInt) as LongInt
+private function EstimateSliceItemCount(byval startV as SmInt, byval stopV as SmInt, byval stepV as SmInt) as SmInt
   if stepV > 0 then
     if startV >= stopV then return 0
-    dim dist as LongInt = stopV - startV
+    dim dist as SmInt = stopV - startV
     return (dist - 1) \ stepV + 1
   end if
   if startV <= stopV then return 0
-  dim dist as LongInt = startV - stopV
-  dim mag as ULongInt = UInt64MagnitudeOfInt64(stepV)
-  return CLngInt((CULngInt(dist - 1) \ mag) + 1ull)
+  dim dist as SmInt = startV - stopV
+  dim mag as SmUInt = UIntMagnitudeOfSmInt(stepV)
+  return SmCInt((SmCUInt(dist - 1) \ mag) + SmCUInt(1))
 end function
 
 '' Negative indexes wrap. An index that does not land in [0, length) sets the out-of-range error.
 '' length + idx runs only when the sum is inside that range, so it cannot overflow.
-private function TryResolveArrayIndex(byval arrLen as LongInt, byval idxInt as LongInt, byref resolved as LongInt) as Boolean
+private function TryResolveArrayIndex(byval arrLen as SmInt, byval idxInt as SmInt, byref resolved as SmInt) as Boolean
   if idxInt >= 0 then
     if idxInt >= arrLen then
       SetParseErrorById(PARSE_ERR_ARRAY_INDEX_OUT_OF_RANGE)
@@ -4766,10 +4937,10 @@ end function
 
 private function TryApplyArrayIndex(byref baseValue as EvalValue, byref idxValue as EvalValue, byref outValue as EvalValue) as Boolean
   if syntaxCheckDepth > 0 then
-    ValueSetInt64(outValue, 0)
+    ValueSetSmInt(outValue, 0)
     return TRUE
   end if
-  dim idxInt as LongInt
+  dim idxInt as SmInt
   if TryGetArrayIndexIntFromEvalValue(idxValue, idxInt, FALSE) = FALSE then
     TryGetArrayIndexIntFromEvalValue(idxValue, idxInt, TRUE)
     return FALSE
@@ -4781,8 +4952,8 @@ private function TryApplyArrayIndex(byref baseValue as EvalValue, byref idxValue
   end if
 
   dim arrLen as Integer = ValueArrayLen(baseValue)
-  dim resolved as LongInt
-  if TryResolveArrayIndex(CLngInt(arrLen), idxInt, resolved) = FALSE then return FALSE
+  dim resolved as SmInt
+  if TryResolveArrayIndex(SmCInt(arrLen), idxInt, resolved) = FALSE then return FALSE
 
   dim rawIdx as Integer = lbound(baseValue.arr) + CInt(resolved)
   ValueGetArrayElemAsScalar(baseValue, rawIdx, outValue)
@@ -4798,13 +4969,13 @@ private function TryApplyArraySlice( _
   byval materialize as Boolean _
 ) as Boolean
   if syntaxCheckDepth > 0 then
-    ValueSetInt64(outValue, 0)
+    ValueSetSmInt(outValue, 0)
     return TRUE
   end if
 
-  dim startIdx as LongInt = 0
-  dim stopIdx as LongInt = 0
-  dim stepIdx as LongInt = 1
+  dim startIdx as SmInt = 0
+  dim stopIdx as SmInt = 0
+  dim stepIdx as SmInt = 1
   if hasStart then
     if TryGetArrayIndexIntFromEvalValue(startValue, startIdx) = FALSE then return FALSE
   end if
@@ -4826,11 +4997,11 @@ private function TryApplyArraySlice( _
   '' Slice assignment only needs the bound checks above. Skip the element copy.
   if materialize = FALSE then return TRUE
 
-  dim arrLen as LongInt = CLngInt(ValueArrayLen(baseValue))
-  dim normStart as LongInt
-  dim normStop as LongInt
+  dim arrLen as SmInt = SmCInt(ValueArrayLen(baseValue))
+  dim normStart as SmInt
+  dim normStop as SmInt
   NormalizePythonSliceBounds(arrLen, hasStart, startIdx, hasStop, stopIdx, stepIdx, normStart, normStop)
-  dim outCount as LongInt = EstimateSliceItemCount(normStart, normStop, stepIdx)
+  dim outCount as SmInt = EstimateSliceItemCount(normStart, normStop, stepIdx)
   if outCount <= 0 then
     ValueInitArrayLike(outValue, 0, -1)
     return TRUE
@@ -4838,7 +5009,7 @@ private function TryApplyArraySlice( _
 
   ValueInitArrayLike(outValue, 0, CInt(outCount) - 1)
   dim i as Integer
-  dim curIdx as LongInt = normStart
+  dim curIdx as SmInt = normStart
   dim lb as Integer = lbound(baseValue.arr)
   for i = 0 to CInt(outCount) - 1
     outValue.arr(i) = baseValue.arr(lb + CInt(curIdx))
@@ -4977,8 +5148,8 @@ end function
 
 '' Save shadowed parameters, parse bodyText, then restore variables and the parser stream.
 '' Returns the body parseError captured before the stream is restored. Does not publish parseError.
-private function EvaluateBoundBody(paramNames() as string, byval paramBase as Integer, args() as EvalValue, byval argBase as Integer, byval pCount as Integer, byref bodyText as string, byval suppressTailHint as Boolean, byval captureLambdaCol as Boolean, byref outV as EvalValue) as Integer
-  dim oldExists() as Integer
+private function EvaluateBoundBody(paramNames() as string, byval paramBase as Integer, args() as EvalValue, byval argBase as Integer, byval pCount as Integer, byref bodyText as string, byval suppressTailHint as Boolean, byval captureLambdaCol as Boolean, byref outV as EvalValue) as Boolean
+  dim oldExists() as Boolean
   dim oldValues() as EvalValue
   if pCount > 0 then
     redim oldExists(0 to pCount - 1)
@@ -4990,16 +5161,16 @@ private function EvaluateBoundBody(paramNames() as string, byval paramBase as In
     dim pName as String = paramNames(paramBase + i)
     dim vIdx as Integer = FindVariableIndex(pName)
     if vIdx >= 0 then
-      oldExists(i) = 1
+      oldExists(i) = TRUE
       oldValues(i) = variables(vIdx).value
     else
-      oldExists(i) = 0
+      oldExists(i) = FALSE
     end if
     SetVariable(pName, args(argBase + i))
   next i
 
   dim savedStream as ZString ptr = pStream
-  dim savedParseError as Integer = parseError
+  dim savedParseError as Boolean = parseError
   dim savedWasPercentage as Boolean = wasPercentage
   dim savedExprStart as ZString ptr = exprStart
   dim savedBaseCol as Integer = errorBaseCol
@@ -5007,15 +5178,15 @@ private function EvaluateBoundBody(paramNames() as string, byval paramBase as In
   pStream = StrPtr(body)
   exprStart = pStream
   errorBaseCol = 1
-  parseError = 0
+  parseError = FALSE
   if suppressTailHint then suppressBareFunctionTailHint = TRUE
   outV = ParseExpression()
   if suppressTailHint then suppressBareFunctionTailHint = FALSE
   SkipSpaces()
   if pStream[0] <> CHAR_NUL then SetParseErrorById(PARSE_ERR_UNEXPECTED_INPUT)
-  dim evalError as Integer = parseError
+  dim evalError as Boolean = parseError
   if captureLambdaCol then
-    if evalError <> 0 then
+    if evalError then
       unaryLambdaEvalBodyErrorCol = CurrentParseErrorColumn()
     else
       unaryLambdaEvalBodyErrorCol = 0
@@ -5030,7 +5201,7 @@ private function EvaluateBoundBody(paramNames() as string, byval paramBase as In
 
   for i = 0 to pCount - 1
     dim pNameRestore as String = paramNames(paramBase + i)
-    if oldExists(i) = 1 then
+    if oldExists(i) then
       SetVariable(pNameRestore, oldValues(i))
     else
       dim vx as Integer = FindVariableIndex(pNameRestore)
@@ -5058,6 +5229,12 @@ private function EvaluateUserFunction(byref fnName as String, args() as EvalValu
     return TRUE
   end if
 
+  '' Same order as C++ evalUserFunctionCall: depth before recursion / call-stack size.
+  if boundEvalDepth >= BOUND_EVAL_DEPTH_MAX then
+    SetParseErrorById(PARSE_ERR_MAX_EVALUATION_DEPTH_REACHED)
+    return TRUE
+  end if
+
   dim lowNm as String = lcase(fnName)
   dim si as Integer
   for si = 0 to udfCallStackSp - 1
@@ -5073,11 +5250,13 @@ private function EvaluateUserFunction(byref fnName as String, args() as EvalValu
   udfCallStack(udfCallStackSp) = lowNm
   udfCallStackSp += 1
 
-  dim evalError as Integer = EvaluateBoundBody(userFunctions(idx).params(), 0, args(), 0, pCount, userFunctions(idx).expr, FALSE, FALSE, outV)
+  boundEvalDepth += 1
+  dim evalError as Boolean = EvaluateBoundBody(userFunctions(idx).params(), 0, args(), 0, pCount, userFunctions(idx).expr, FALSE, FALSE, outV)
+  boundEvalDepth -= 1
 
   udfCallStackSp -= 1
 
-  if evalError <> 0 then parseError = 1
+  if evalError then parseError = TRUE
   return TRUE
 end function
 
@@ -5096,15 +5275,22 @@ private function EvaluateInlineLambda(fnParams() as string, byref lambdaBodyTxt 
     return TRUE
   end if
 
-  dim evalError as Integer = EvaluateBoundBody(fnParams(), lbound(fnParams), args(), lbound(args), pCount, lambdaBodyTxt, TRUE, TRUE, outV)
-  if evalError <> 0 then parseError = 1
+  if boundEvalDepth >= BOUND_EVAL_DEPTH_MAX then
+    SetParseErrorById(PARSE_ERR_MAX_EVALUATION_DEPTH_REACHED)
+    return TRUE
+  end if
+
+  boundEvalDepth += 1
+  dim evalError as Boolean = EvaluateBoundBody(fnParams(), lbound(fnParams), args(), lbound(args), pCount, lambdaBodyTxt, TRUE, TRUE, outV)
+  boundEvalDepth -= 1
+  if evalError then parseError = TRUE
   return TRUE
 end function
 
 private function ClampScalarValue(byref sv as ScalarValue, byref minSv as ScalarValue, byref maxSv as ScalarValue) as ScalarValue
-  dim v as Double = ScalarNumericReal(sv)
-  dim minS as Double = minSv.scalar
-  dim maxS as Double = maxSv.scalar
+  dim v as SmFloat = ScalarNumericReal(sv)
+  dim minS as SmFloat = minSv.scalar
+  dim maxS as SmFloat = maxSv.scalar
 
   if IsNaNValue(v) then
     if IsNaNValue(minS) = FALSE then return minSv
@@ -5156,84 +5342,84 @@ private function ApplyClamp(byref valueV as EvalValue, byref minV as EvalValue, 
   return MapClampOverValue(valueV, minV.scalarValue, maxV.scalarValue, outV)
 end function
 
-private function GcdULong(byval a as ULongInt, byval b as ULongInt) as ULongInt
-  dim x as ULongInt = a
-  dim y as ULongInt = b
-  while y <> 0ull
-    dim t as ULongInt = x mod y
+private function GcdSmUInt(byval a as SmUInt, byval b as SmUInt) as SmUInt
+  dim x as SmUInt = a
+  dim y as SmUInt = b
+  while y <> SmCUInt(0)
+    dim t as SmUInt = x mod y
     x = y
     y = t
   wend
   return x
 end function
 
-private function GcdInt64(byval a as LongInt, byval b as LongInt) as LongInt
-  return CLngInt(GcdULong(CULngInt(abs(a)), CULngInt(abs(b))))
+private function GcdSmInt(byval a as SmInt, byval b as SmInt) as SmInt
+  return SmCInt(GcdSmUInt(SmCUInt(abs(a)), SmCUInt(abs(b))))
 end function
 
 private sub ScalarClearCartesianRenderExact(byref sv as ScalarValue)
   sv.flags = sv.flags and not (SVF_RENDER_RATIONAL or SVF_IMAG_RENDER_RATIONAL)
-  ScalarSetExactUInt64Valid(sv, FALSE)
-  ScalarSetImagExactUInt64Valid(sv, FALSE)
+  ScalarSetExactSmUIntValid(sv, FALSE)
+  ScalarSetImagExactSmUIntValid(sv, FALSE)
 end sub
 
-private sub ScalarApplyExactInt64Part(byref sv as ScalarValue, byval imagPart as Boolean, byval n as LongInt)
+private sub ScalarApplyExactSmIntPart(byref sv as ScalarValue, byval imagPart as Boolean, byval n as SmInt)
   if imagPart then
-    sv.imagExactInt64 = n
-    ScalarSetImagExactInt64Valid(sv, TRUE)
-    ScalarSetImagExactUInt64Valid(sv, FALSE)
+    sv.imagExactInt = n
+    ScalarSetImagExactSmIntValid(sv, TRUE)
+    ScalarSetImagExactSmUIntValid(sv, FALSE)
     sv.flags = sv.flags and not SVF_IMAG_RENDER_RATIONAL
   else
-    sv.exactInt64 = n
-    ScalarSetExactInt64Valid(sv, TRUE)
-    ScalarSetExactUInt64Valid(sv, FALSE)
+    sv.exactInt = n
+    ScalarSetExactSmIntValid(sv, TRUE)
+    ScalarSetExactSmUIntValid(sv, FALSE)
     sv.flags = sv.flags and not SVF_RENDER_RATIONAL
   end if
 end sub
 
-private sub ScalarApplyReducedRationalPart(byref sv as ScalarValue, byval imagPart as Boolean, byval num as LongInt, byval den as ULongInt)
-  dim n as LongInt = num
-  dim d as ULongInt = den
-  dim g as LongInt = GcdInt64(abs(n), CLngInt(d))
+private sub ScalarApplyReducedRationalPart(byref sv as ScalarValue, byval imagPart as Boolean, byval num as SmInt, byval den as SmUInt)
+  dim n as SmInt = num
+  dim d as SmUInt = den
+  dim g as SmInt = GcdSmInt(abs(n), SmCInt(d))
   if g > 0 then
     n = n \ g
-    d = CULngInt(CLngInt(d) \ g)
+    d = SmCUInt(SmCInt(d) \ g)
   end if
   if imagPart then
-    sv.imagExactInt64 = n
-    ScalarSetImagExactInt64Valid(sv, TRUE)
-    if d = 1ull then
-      ScalarSetImagExactUInt64Valid(sv, FALSE)
+    sv.imagExactInt = n
+    ScalarSetImagExactSmIntValid(sv, TRUE)
+    if d = SmCUInt(1) then
+      ScalarSetImagExactSmUIntValid(sv, FALSE)
       sv.flags = sv.flags and not SVF_IMAG_RENDER_RATIONAL
     else
-      sv.imagExactUInt64 = d
-      ScalarSetImagExactUInt64Valid(sv, TRUE)
+      sv.imagExactUInt = d
+      ScalarSetImagExactSmUIntValid(sv, TRUE)
       sv.flags = sv.flags or SVF_IMAG_RENDER_RATIONAL
     end if
   else
-    sv.exactInt64 = n
-    ScalarSetExactInt64Valid(sv, TRUE)
-    if d = 1ull then
-      ScalarSetExactUInt64Valid(sv, FALSE)
+    sv.exactInt = n
+    ScalarSetExactSmIntValid(sv, TRUE)
+    if d = SmCUInt(1) then
+      ScalarSetExactSmUIntValid(sv, FALSE)
       sv.flags = sv.flags and not SVF_RENDER_RATIONAL
     else
-      sv.exactUInt64 = d
-      ScalarSetExactUInt64Valid(sv, TRUE)
+      sv.exactUInt = d
+      ScalarSetExactSmUIntValid(sv, TRUE)
       sv.flags = sv.flags or SVF_RENDER_RATIONAL
     end if
   end if
 end sub
 
-private sub RawCartesianAssignReducedRational(byval num as LongInt, byval den as ULongInt, byref outC as RawCartesianScalar)
-  dim n as LongInt = num
-  dim d as ULongInt = den
-  dim g as LongInt = GcdInt64(abs(n), CLngInt(d))
+private sub RawCartesianAssignReducedRational(byval num as SmInt, byval den as SmUInt, byref outC as RawCartesianScalar)
+  dim n as SmInt = num
+  dim d as SmUInt = den
+  dim g as SmInt = GcdSmInt(abs(n), SmCInt(d))
   if g > 0 then
     n = n \ g
-    d = CULngInt(CLngInt(d) \ g)
+    d = SmCUInt(SmCInt(d) \ g)
   end if
-  if d = 1ull then
-    outC.kind = RSK_INT64
+  if d = SmCUInt(1) then
+    outC.kind = RSK_SMINT
     outC.intValue = n
   else
     outC.kind = RSK_RATIONAL
@@ -5243,96 +5429,99 @@ private sub RawCartesianAssignReducedRational(byval num as LongInt, byval den as
 end sub
 
 
-private function TryLcmULong(byval a as ULongInt, byval b as ULongInt, byref outL as ULongInt) as Boolean
-  if a = 0ull orelse b = 0ull then
-    outL = 0ull
+private function TryLcmSmUInt(byval a as SmUInt, byval b as SmUInt, byref outL as SmUInt) as Boolean
+  if a = SmCUInt(0) orelse b = SmCUInt(0) then
+    outL = SmCUInt(0)
     return TRUE
   end if
-  dim g as ULongInt = GcdULong(a, b)
-  dim a1 as ULongInt = a \ g
-  if a1 > (FB_U64_MAX \ b) then return FALSE
+  dim g as SmUInt = GcdSmUInt(a, b)
+  dim a1 as SmUInt = a \ g
+  if a1 > (SM_UINT_MAX \ b) then return FALSE
   outL = a1 * b
   return TRUE
 end function
 
-private function TryGetExactNonNegativeUInt64Pair(byref aV as EvalValue, byref bV as EvalValue, byref aU as ULongInt, byref bU as ULongInt) as Boolean
+private function TryGetExactNonNegativeSmUIntPair(byref aV as EvalValue, byref bV as EvalValue, byref aU as SmUInt, byref bU as SmUInt) as Boolean
   if aV.kind <> VK_SCALAR orelse bV.kind <> VK_SCALAR then return FALSE
-  return TryGetExactNonNegativeUInt64Scalar(aV.scalarValue, aU) andalso TryGetExactNonNegativeUInt64Scalar(bV.scalarValue, bU)
+  return TryGetExactNonNegativeSmUIntScalar(aV.scalarValue, aU) andalso TryGetExactNonNegativeSmUIntScalar(bV.scalarValue, bU)
 end function
 
-'' Returns 0 = ok, 1 = operands not exact integers, 2 = lcm overflow (uint64)
+'' Returns 0 = ok, 1 = operands not exact integers, 2 = lcm overflow (SmUInt)
 private function TryApplyGcdLcmScalarPair(byref aV as EvalValue, byref bV as EvalValue, byval doLcm as Boolean, byref outV as EvalValue) as Integer
-  dim aU as ULongInt, bU as ULongInt
-  if TryGetExactNonNegativeUInt64Pair(aV, bV, aU, bU) then
-    if aU = 0ull andalso bU = 0ull then return 2
-    dim gU as ULongInt = GcdULong(aU, bU)
+  dim aU as SmUInt, bU as SmUInt
+  if TryGetExactNonNegativeSmUIntPair(aV, bV, aU, bU) then
+    if aU = SmCUInt(0) andalso bU = SmCUInt(0) then return 2
+    dim gU as SmUInt = GcdSmUInt(aU, bU)
     if doLcm = FALSE then
-      ValueSetUInt64(outV, gU)
+      ValueSetSmUInt(outV, gU)
       return 0
     end if
-    dim lU as ULongInt
-    if TryLcmULong(aU, bU, lU) = FALSE then
-      dim g as ULongInt = GcdULong(aU, bU)
-      ValueSetScalar(outV, CDbl(aU \ g) * CDbl(bU))
+    dim lU as SmUInt
+    if TryLcmSmUInt(aU, bU, lU) = FALSE then
+      dim g as SmUInt = GcdSmUInt(aU, bU)
+      ValueSetScalar(outV, SmCFloat(aU \ g) * SmCFloat(bU))
       return 0
     end if
-    ValueSetUInt64(outV, lU)
+    ValueSetSmUInt(outV, lU)
     return 0
   end if
   if aV.kind <> VK_SCALAR orelse bV.kind <> VK_SCALAR then return 1
   dim aNeg as Boolean, bNeg as Boolean
   if TryGetExactSignMagnitudeScalar(aV.scalarValue, aNeg, aU) = FALSE then return 1
   if TryGetExactSignMagnitudeScalar(bV.scalarValue, bNeg, bU) = FALSE then return 1
-  if aU = 0ull andalso bU = 0ull then return 2
+  if aU = SmCUInt(0) andalso bU = SmCUInt(0) then return 2
   if doLcm = FALSE then
-    ValueSetUInt64PreferInt64(outV, GcdULong(aU, bU))
+    ValueSetSmUIntPreferSmInt(outV, GcdSmUInt(aU, bU))
     return 0
   end if
-  dim lU as ULongInt
-  if TryLcmULong(aU, bU, lU) = FALSE then
-    dim g as ULongInt = GcdULong(aU, bU)
-    ValueSetScalar(outV, CDbl(aU \ g) * CDbl(bU))
+  dim lU as SmUInt
+  if TryLcmSmUInt(aU, bU, lU) = FALSE then
+    dim g as SmUInt = GcdSmUInt(aU, bU)
+    ValueSetScalar(outV, SmCFloat(aU \ g) * SmCFloat(bU))
     return 0
   end if
-  ValueSetUInt64PreferInt64(outV, lU)
+  ValueSetSmUIntPreferSmInt(outV, lU)
   return 0
 end function
 
-private function TryComputeNprULong(byval n as ULongInt, byval r as ULongInt, byref outV as ULongInt) as Boolean
+private function TryComputeNprSmUInt(byval n as SmUInt, byval r as SmUInt, byref outV as SmUInt) as Boolean
   if r > n then return FALSE
-  dim acc as ULongInt = 1ull
-  dim i as ULongInt = 0ull
+  dim acc as SmUInt = SmCUInt(1)
+  dim i as SmUInt = SmCUInt(0)
   while i < r
-    if TryMulULongChecked(acc, n - i, acc) = FALSE then return FALSE
-    i += 1ull
+    if TryMulSmUIntChecked(acc, n - i, acc) = FALSE then return FALSE
+    i += SmCUInt(1)
   wend
   outV = acc
   return TRUE
 end function
 
-private function TryComputeNcrULong(byval n as ULongInt, byval r as ULongInt, byref outV as ULongInt) as Boolean
+private function TryComputeNcrSmUInt(byval n as SmUInt, byval r as SmUInt, byref outV as SmUInt) as Boolean
   if r > n then return FALSE
-  dim rEff as ULongInt = r
+  dim rEff as SmUInt = r
   if (n - rEff) < rEff then rEff = (n - rEff)
-  dim acc as ULongInt = 1ull
-  dim i as ULongInt = 1ull
+  dim acc as SmUInt = SmCUInt(1)
+  dim i as SmUInt = SmCUInt(1)
   while i <= rEff
-    dim num as ULongInt = (n - rEff) + i
-    dim den as ULongInt = i
-    dim g1 as ULongInt = GcdULong(num, den)
+    dim num as SmUInt = (n - rEff) + i
+    dim den as SmUInt = i
+    dim g1 as SmUInt = GcdSmUInt(num, den)
     num \= g1
     den \= g1
-    dim g2 as ULongInt = GcdULong(acc, den)
+    dim g2 as SmUInt = GcdSmUInt(acc, den)
     acc \= g2
     den \= g2
-    if den <> 1ull then return FALSE
-    if TryMulULongChecked(acc, num, acc) = FALSE then return FALSE
-    i += 1ull
+    if den <> SmCUInt(1) then return FALSE
+    if TryMulSmUIntChecked(acc, num, acc) = FALSE then return FALSE
+    i += SmCUInt(1)
   wend
   outV = acc
   return TRUE
 end function
 
+#if SM_FLOAT_MANT_DIGITS = 53
+'' SM_FIXED_WIDTH_BEGIN: exact product for IEEE binary64 (53-bit mantissa) using 64-bit integer arithmetic.
+'' Fixed widths on purpose; compiled only when SmFloat has a 53-bit mantissa (see DdMulExact).
 private function BitLengthU64(byval x as ULongInt) as Integer
   dim n as Integer = 0
   if (x shr 32) <> 0ull then n += 32: x = x shr 32
@@ -5343,14 +5532,18 @@ private function BitLengthU64(byval x as ULongInt) as Integer
   if (x shr 1) <> 0ull then n += 2 else if x <> 0ull then n += 1
   return n
 end function
+'' SM_FIXED_WIDTH_END
+#endif
 
-private sub DdTwoSum(byval a as Double, byval b as Double, byref hi as Double, byref lo as Double)
+private sub DdTwoSum(byval a as SmFloat, byval b as SmFloat, byref hi as SmFloat, byref lo as SmFloat)
   hi = a + b
-  dim bb as Double = hi - a
+  dim bb as SmFloat = hi - a
   lo = (a - (hi - bb)) + (b - bb)
 end sub
 
-private sub DdMulExact(byval a as Double, byval b as Double, byref hi as Double, byref lo as Double)
+#if SM_FLOAT_MANT_DIGITS = 53
+'' SM_FIXED_WIDTH_BEGIN
+private sub DdMulExactBinary64(byval a as Double, byval b as Double, byref hi as Double, byref lo as Double)
   if a = 0.0 then
     hi = 0.0
     lo = 0.0
@@ -5426,73 +5619,103 @@ private sub DdMulExact(byval a as Double, byval b as Double, byref hi as Double,
     lo = libc_ldexp(signV * CDbl(remS), ex - shift)
   end if
 end sub
+'' SM_FIXED_WIDTH_END
+#endif
 
-private sub DdScale(byref hi as Double, byref lo as Double, byval b as Double)
-  dim p1 as Double, p0 as Double
+'' Exact product for any binary SmFloat (Veltkamp split + Dekker two-product): hi = RN(a*b), hi + lo = a*b.
+'' Needs strict IEEE rounding of every operation (no extended-precision intermediates).
+private sub DdMulExactDekker(byval a as SmFloat, byval b as SmFloat, byref hi as SmFloat, byref lo as SmFloat)
+  hi = a * b
+  lo = 0.0
+  if a = 0.0 then exit sub
+  if b = 0.0 then exit sub
+  if IsNonFiniteValue(a) orelse IsNonFiniteValue(b) orelse IsNonFiniteValue(hi) then exit sub
+  const splitFactor as SmFloat = 2.0 ^ ((SM_FLOAT_MANT_DIGITS + 1) \ 2) + 1.0
+  dim ca as SmFloat = splitFactor * a
+  dim cb as SmFloat = splitFactor * b
+  if IsNonFiniteValue(ca) orelse IsNonFiniteValue(cb) then exit sub
+  dim ah as SmFloat = ca - (ca - a)
+  dim al as SmFloat = a - ah
+  dim bh as SmFloat = cb - (cb - b)
+  dim bl as SmFloat = b - bh
+  dim errV as SmFloat = (((ah * bh - hi) + ah * bl) + al * bh) + al * bl
+  if IsNonFiniteValue(errV) = FALSE then lo = errV
+end sub
+
+private sub DdMulExact(byval a as SmFloat, byval b as SmFloat, byref hi as SmFloat, byref lo as SmFloat)
+#if SM_FLOAT_MANT_DIGITS = 53
+  DdMulExactBinary64(a, b, hi, lo)
+#else
+  DdMulExactDekker(a, b, hi, lo)
+#endif
+end sub
+
+private sub DdScale(byref hi as SmFloat, byref lo as SmFloat, byval b as SmFloat)
+  dim p1 as SmFloat, p0 as SmFloat
   DdMulExact(hi, b, p1, p0)
   if IsNonFiniteValue(p1) then
     hi = p1
     lo = 0.0
     exit sub
   end if
-  dim q1 as Double, q0 as Double
+  dim q1 as SmFloat, q0 as SmFloat
   DdMulExact(lo, b, q1, q0)
-  dim s1 as Double, s0 as Double
+  dim s1 as SmFloat, s0 as SmFloat
   DdTwoSum(p0, q1, s1, s0)
-  dim t1 as Double, t0 as Double
+  dim t1 as SmFloat, t0 as SmFloat
   DdTwoSum(s1, q0, t1, t0)
   s0 = s0 + t0
-  dim r1 as Double, r0 as Double
+  dim r1 as SmFloat, r0 as SmFloat
   DdTwoSum(p1, t1, r1, r0)
   r0 = r0 + s0
   DdTwoSum(r1, r0, hi, lo)
 end sub
 
-private sub DdDiv(byref hi as Double, byref lo as Double, byval b as Double)
-  dim qhi as Double = hi / b
-  dim p1 as Double, p0 as Double
+private sub DdDiv(byref hi as SmFloat, byref lo as SmFloat, byval b as SmFloat)
+  dim qhi as SmFloat = hi / b
+  dim p1 as SmFloat, p0 as SmFloat
   DdMulExact(qhi, b, p1, p0)
-  dim remn as Double = ((hi - p1) - p0) + lo
+  dim remn as SmFloat = ((hi - p1) - p0) + lo
   DdTwoSum(qhi, remn / b, hi, lo)
 end sub
 
-private function NprProductFloat(byval n as Double, byval r as ULongInt) as Double
-  dim hi as Double = 1.0
-  dim lo as Double = 0.0
-  dim i as ULongInt = 0ull
+private function NprProductFloat(byval n as SmFloat, byval r as SmUInt) as SmFloat
+  dim hi as SmFloat = 1.0
+  dim lo as SmFloat = 0.0
+  dim i as SmUInt = SmCUInt(0)
   while i < r
-    DdScale(hi, lo, n - CDbl(i))
+    DdScale(hi, lo, n - SmCFloat(i))
     if IsNonFiniteValue(hi) then return hi
-    i += 1ull
+    i += SmCUInt(1)
   wend
   return hi
 end function
 
-private function NcrProductFloat(byval n as Double, byval r as ULongInt) as Double
-  dim hi as Double = 1.0
-  dim lo as Double = 0.0
-  dim rd as Double = CDbl(r)
-  dim i as ULongInt = 1ull
+private function NcrProductFloat(byval n as SmFloat, byval r as SmUInt) as SmFloat
+  dim hi as SmFloat = 1.0
+  dim lo as SmFloat = 0.0
+  dim rd as SmFloat = SmCFloat(r)
+  dim i as SmUInt = SmCUInt(1)
   while i <= r
-    dim factor as Double = n - rd + CDbl(i)
+    dim factor as SmFloat = n - rd + SmCFloat(i)
     dim eh as Long, ef as Long
-    libc_frexp(hi, eh)
-    libc_frexp(factor, ef)
+    LibFrexp(hi, eh)
+    LibFrexp(factor, ef)
     dim scale as Long = 0
-    if eh + ef > 980 then
-      scale = eh + ef - 900
-      hi = libc_ldexp(hi, -scale)
-      lo = libc_ldexp(lo, -scale)
+    if eh + ef > SM_FLOAT_MAX_EXP2 - 44 then
+      scale = eh + ef - (SM_FLOAT_MAX_EXP2 - 124)
+      hi = LibLdexp(hi, -scale)
+      lo = LibLdexp(lo, -scale)
     end if
     DdScale(hi, lo, factor)
     if IsNonFiniteValue(hi) then return hi
-    DdDiv(hi, lo, CDbl(i))
+    DdDiv(hi, lo, SmCFloat(i))
     if scale <> 0 then
-      hi = libc_ldexp(hi, scale)
-      lo = libc_ldexp(lo, scale)
+      hi = LibLdexp(hi, scale)
+      lo = LibLdexp(lo, scale)
     end if
     if IsNonFiniteValue(hi) then return hi
-    i += 1ull
+    i += SmCUInt(1)
   wend
   return hi
 end function
@@ -5500,81 +5723,81 @@ end function
 private function TryApplyNcrNpr(byref nV as EvalValue, byref rV as EvalValue, byval doPerm as Boolean, byref outV as EvalValue) as Boolean
   if nV.kind <> VK_SCALAR orelse rV.kind <> VK_SCALAR then return FALSE
   dim nNeg as Boolean, rNeg as Boolean
-  dim n as ULongInt, r as ULongInt
+  dim n as SmUInt, r as SmUInt
   if TryGetExactSignMagnitudeScalar(nV.scalarValue, nNeg, n) = FALSE then return FALSE
   if TryGetExactSignMagnitudeScalar(rV.scalarValue, rNeg, r) = FALSE then return FALSE
   if rNeg then return FALSE
-  if r = 0ull then
-    ValueSetInt64(outV, 1)
+  if r = SmCUInt(0) then
+    ValueSetSmInt(outV, 1)
     return TRUE
   end if
   if nNeg = FALSE andalso r > n then
-    ValueSetInt64(outV, 0)
+    ValueSetSmInt(outV, 0)
     return TRUE
   end if
   if nNeg = FALSE then
-    dim exact as ULongInt
+    dim exact as SmUInt
     dim exactOk as Boolean
     if doPerm then
-      exactOk = TryComputeNprULong(n, r, exact)
+      exactOk = TryComputeNprSmUInt(n, r, exact)
     else
-      exactOk = TryComputeNcrULong(n, r, exact)
+      exactOk = TryComputeNcrSmUInt(n, r, exact)
     end if
     if exactOk then
-      ValueSetUInt64PreferInt64(outV, exact)
+      ValueSetSmUIntPreferSmInt(outV, exact)
       return TRUE
     end if
     if doPerm then
-      ValueSetScalar(outV, NprProductFloat(CDbl(n), r))
+      ValueSetScalar(outV, NprProductFloat(SmCFloat(n), r))
     else
-      dim rEff as ULongInt = r
+      dim rEff as SmUInt = r
       if (n - r) < rEff then rEff = n - r
-      ValueSetScalar(outV, NcrProductFloat(CDbl(n), rEff))
+      ValueSetScalar(outV, NcrProductFloat(SmCFloat(n), rEff))
     end if
     return TRUE
   end if
   if doPerm then
-    if n <= FB_I64_MAX_U then
-      dim accI as LongInt = 1
-      dim term as LongInt = -CLngInt(n)
+    if n <= SM_INT_MAX_U then
+      dim accI as SmInt = 1
+      dim term as SmInt = -SmCInt(n)
       dim exactI as Boolean = TRUE
-      dim i as ULongInt = 0ull
+      dim i as SmUInt = SmCUInt(0)
       while i < r
-        if TryMulInt64(accI, term, accI) = FALSE then
+        if TryMulSmInt(accI, term, accI) = FALSE then
           exactI = FALSE
           exit while
         end if
-        if i + 1ull = r then exit while
-        if term = FB_I64_MIN then
+        if i + SmCUInt(1) = r then exit while
+        if term = SM_INT_MIN then
           exactI = FALSE
           exit while
         end if
         term -= 1
-        i += 1ull
+        i += SmCUInt(1)
       wend
       if exactI then
-        ValueSetInt64(outV, accI)
+        ValueSetSmInt(outV, accI)
         return TRUE
       end if
     end if
-    ValueSetScalar(outV, NprProductFloat(-CDbl(n), r))
+    ValueSetScalar(outV, NprProductFloat(-SmCFloat(n), r))
     return TRUE
   end if
-  if r <= (FB_U64_MAX - n) then
-    dim top as ULongInt = n + r - 1ull
-    dim comb as ULongInt
-    if TryComputeNcrULong(top, r, comb) then
-      if (r and 1ull) = 0ull then
-        ValueSetUInt64PreferInt64(outV, comb)
-      elseif comb <= FB_I64_MAX_U then
-        ValueSetInt64(outV, -CLngInt(comb))
+  if r <= (SM_UINT_MAX - n) then
+    dim top as SmUInt = n + r - SmCUInt(1)
+    dim comb as SmUInt
+    if TryComputeNcrSmUInt(top, r, comb) then
+      if (r and SmCUInt(1)) = SmCUInt(0) then
+        ValueSetSmUIntPreferSmInt(outV, comb)
+      elseif comb <= SM_INT_MAX_U then
+        ValueSetSmInt(outV, -SmCInt(comb))
       else
-        ValueSetScalar(outV, -CDbl(comb))
+        ValueSetScalar(outV, -SmCFloat(comb))
       end if
       return TRUE
     end if
   end if
-  ValueSetScalar(outV, NcrProductFloat(-CDbl(n), r))
+  ValueSetScalar(outV, NcrProductFloat(-SmCFloat(n), r))
   return TRUE
 end function
 
@@ -5648,43 +5871,55 @@ private function TryApplyScalarBinaryIntegerBuiltin(byval fnId as Integer, byref
   return TRUE
 end function
 
-'' True when x is within tolerance of N*x_mult for integer N (quotient test; avoids x-n*m cancellation on large |x|).
-private function IsMultipleOf(byval x as Double, byval x_mult as Double) as Boolean
+'' When TRUE, outN is the nearest integer quotient x/x_mult (same N used in the tolerance test).
+private function TryMultipleQuotient(byval x as SmFloat, byval x_mult as SmFloat, byref outN as SmFloat) as Boolean
   if x_mult = 0.0 then return FALSE
-  dim q as Double = x / x_mult
+  dim q as SmFloat = x / x_mult
   if IsNonFiniteValue(q) then return FALSE
-  dim n as Double = round(q)
-  if abs(q - n) > 1e-9 then return FALSE
+  dim n as SmFloat = round(q)
+  ' Tiny |x| is not a multiple (sin(1e-10) stays 1e-10); the rest must agree to a few ulps of N, which covers
+  ' pi, rad(180), N*pi but not decimal approximations such as 3.14159265359.
+  if n = 0.0 then return FALSE
+  dim tol as SmFloat = 16.0 * SM_FLOAT_EPSILON * abs(n)
+  if tol > SM_TOL_LOST6 then tol = SM_TOL_LOST6
+  if abs(q - n) > tol then return FALSE
+  outN = n
   return TRUE
 end function
 
+'' True when x is within tolerance of N*x_mult for integer N (quotient test; avoids x-n*m cancellation on large |x|).
+private function IsMultipleOf(byval x as SmFloat, byval x_mult as SmFloat) as Boolean
+  dim n as SmFloat
+  return TryMultipleQuotient(x, x_mult, n)
+end function
+
 '' k = round(x / (pi/2)) when x is a multiple of pi/2; FALSE if not or |k| is out of trig range.
-private function TryTrigHalfPiQuotient(byval x as Double, byref outK as LongInt) as Boolean
-  if IsMultipleOf(x, FB_PI_VAL/2) = FALSE then return FALSE
-  dim q as Double = round(x / (FB_PI_VAL/2))
+private function TryTrigHalfPiQuotient(byval x as SmFloat, byref outK as SmInt) as Boolean
+  dim q as SmFloat
+  if TryMultipleQuotient(x, FB_HALF_PI_VAL, q) = FALSE then return FALSE
   if IsNonFiniteValue(q) then return FALSE
-  if abs(q) >= FB_MAX_EXACT_INT_FROM_DOUBLE then return FALSE
-  outK = CLngInt(q)
+  if abs(q) >= SM_MAX_EXACT_INT_FROM_FLOAT then return FALSE
+  outK = SmCInt(q)
   return TRUE
 end function
 
 '' k = round(x / (pi/4)) when x is a multiple of pi/4; FALSE if not or |k| is out of trig range.
-private function TryTrigQuarterPiQuotient(byval x as Double, byref outK as LongInt) as Boolean
-  if IsMultipleOf(x, FB_PI_VAL/4) = FALSE then return FALSE
-  dim q as Double = round(x / (FB_PI_VAL/4))
+private function TryTrigQuarterPiQuotient(byval x as SmFloat, byref outK as SmInt) as Boolean
+  dim q as SmFloat
+  if TryMultipleQuotient(x, FB_QUARTER_PI_VAL, q) = FALSE then return FALSE
   if IsNonFiniteValue(q) then return FALSE
-  if abs(q) >= FB_MAX_EXACT_INT_FROM_DOUBLE then return FALSE
-  outK = CLngInt(q)
+  if abs(q) >= SM_MAX_EXACT_INT_FROM_FLOAT then return FALSE
+  outK = SmCInt(q)
   return TRUE
 end function
 
-private function CalcSin(byval x as Double) as Double
+private function CalcSin(byval x as SmFloat) as SmFloat
   if x = 0.0 then return 0.0
   if IsNonFiniteValue(x) then return LibSin(x)
   if IsMultipleOf(x, FB_PI_VAL) then return 0.0
-  dim k as LongInt
+  dim k as SmInt
   if TryTrigHalfPiQuotient(x, k) then
-    dim r as LongInt = k mod 4
+    dim r as SmInt = k mod 4
     if r < 0 then r += 4
     if r = 1 then return 1.0
     if r = 3 then return -1.0
@@ -5693,26 +5928,31 @@ private function CalcSin(byval x as Double) as Double
   return LibSin(x)
 end function
 
-private function CalcCos(byval x as Double) as Double
+private function CalcCos(byval x as SmFloat) as SmFloat
   if IsNonFiniteValue(x) then return LibCos(x)
-  if IsMultipleOf(x, FB_PI_VAL) = FALSE then
-    dim k as LongInt
-    if TryTrigHalfPiQuotient(x, k) andalso (k mod 2) <> 0 then return 0.0
+  ' Mirror sin's half-pi snap: multiples of pi/2 map to exact 0, +-1 (cos(n*pi) = (-1)^n).
+  dim k as SmInt
+  if TryTrigHalfPiQuotient(x, k) then
+    dim r as SmInt = k mod 4
+    if r < 0 then r += 4
+    if r = 0 then return 1.0
+    if r = 2 then return -1.0
+    return 0.0
   end if
   return LibCos(x)
 end function
 
-private function CalcTan(byval x as Double) as Double
+private function CalcTan(byval x as SmFloat) as SmFloat
   if x = 0.0 then return 0.0
   if IsNonFiniteValue(x) then return LibTan(x)
   if IsMultipleOf(x, FB_PI_VAL) then return 0.0
-  dim k as LongInt
+  dim k as SmInt
   if TryTrigHalfPiQuotient(x, k) andalso (k mod 2) <> 0 then
     if k > 0 then return 1.0/0.0
     return -1.0/0.0
   end if
   if TryTrigQuarterPiQuotient(x, k) andalso (k mod 2) <> 0 then
-    dim r as LongInt = k mod 4
+    dim r as SmInt = k mod 4
     if r < 0 then r += 4
     if r = 1 then return 1.0
     if r = 3 then return -1.0
@@ -5720,7 +5960,7 @@ private function CalcTan(byval x as Double) as Double
   return LibTan(x)
 end function
 
-private function CalcAtan2(byval y as Double, byval x as Double) as Double
+private function CalcAtan2(byval y as SmFloat, byval x as SmFloat) as SmFloat
   if x > 0 then return atn(y / x)
   if x < 0 then
     if y >= 0 then
@@ -5734,18 +5974,18 @@ private function CalcAtan2(byval y as Double, byval x as Double) as Double
   return 0
 end function
 
-private function CalcHypot(byval x as Double, byval y as Double) as Double
-  dim ax as Double = abs(x)
-  dim ay as Double = abs(y)
+private function CalcHypot(byval x as SmFloat, byval y as SmFloat) as SmFloat
+  dim ax as SmFloat = abs(x)
+  dim ay as SmFloat = abs(y)
   if ax < ay then swap ax, ay
   if ay = 0.0 orelse IsNonFiniteValue(ax) then return ax + ay
   '' Squares stay in range here; outside it scale by the larger part to avoid overflow/underflow.
-  if ax <= FB_HYPOT_DIRECT_MAX andalso ay >= FB_HYPOT_DIRECT_MIN then return sqr((ax * ax) + (ay * ay))
-  dim t as Double = ay / ax
+  if ax <= SM_HYPOT_DIRECT_MAX andalso ay >= SM_HYPOT_DIRECT_MIN then return sqr((ax * ax) + (ay * ay))
+  dim t as SmFloat = ay / ax
   return ax * sqr(1.0 + t * t)
 end function
 
-private sub CalcRoundingFnHugeAsFloat(byval fnId as Integer, byval x as Double, byref outV as EvalValue)
+private sub CalcRoundingFnHugeAsFloat(byval fnId as Integer, byval x as SmFloat, byref outV as EvalValue)
   '' Fix/Int are not reliable past exact LongInt range; use C floor for full double domain.
   select case fnId
   case FUNC_INT, FUNC_TRUNC
@@ -5760,9 +6000,9 @@ private sub CalcRoundingFnHugeAsFloat(byval fnId as Integer, byval x as Double, 
     ValueSetScalar(outV, -floor(-x))
   case FUNC_ROUND
     if x >= 0 then
-      ValueSetScalar(outV, floor(x + 0.5))
+      ValueSetScalar(outV, RoundHalfUpNonNegFloat(x))
     else
-      ValueSetScalar(outV, -floor(-x + 0.5))
+      ValueSetScalar(outV, -RoundHalfUpNonNegFloat(-x))
     end if
   case else
     ValueSetScalar(outV, x)
@@ -5770,22 +6010,22 @@ private sub CalcRoundingFnHugeAsFloat(byval fnId as Integer, byval x as Double, 
 end sub
 
 private sub calcRoundingFn(byval fnId as Integer, byref scalarV as ScalarValue, byref outV as EvalValue)
-  dim x as Double = scalarV.scalar
+  dim x as SmFloat = scalarV.scalar
 
   if IsNonFiniteValue(x) then
     ValueSetScalar(outV, x)
-  elseif scalarV.exactUInt64Valid then
-    ValueSetUInt64(outV, scalarV.exactUInt64)
-  elseif scalarV.exactInt64Valid then
-    ValueSetInt64(outV, scalarV.exactInt64)
-  elseif (x > FB_MAX_EXACT_INT_FROM_DOUBLE) orelse (x < -FB_MAX_EXACT_INT_FROM_DOUBLE) then
-    dim hugeInt as LongInt
-    if TryGetExactInt64FromDouble(x, hugeInt) then
-      ValueSetInt64(outV, hugeInt)
-    elseif (x >= 0) andalso (x < FB_2_POW_64_D) andalso (x = floor(x)) then
-      dim u as ULongInt = CULngInt(floor(x))
-      if CDbl(u) = x then
-        ValueSetUInt64(outV, u)
+  elseif scalarV.exactUIntValid then
+    ValueSetSmUInt(outV, scalarV.exactUInt)
+  elseif scalarV.exactIntValid then
+    ValueSetSmInt(outV, scalarV.exactInt)
+  elseif (x > SM_MAX_EXACT_INT_FROM_FLOAT) orelse (x < -SM_MAX_EXACT_INT_FROM_FLOAT) then
+    dim hugeInt as SmInt
+    if TryGetExactSmIntFromFloat(x, hugeInt) then
+      ValueSetSmInt(outV, hugeInt)
+    elseif (x >= 0) andalso (x < SM_FLOAT_SMUINT_BOUND) andalso (x = floor(x)) then
+      dim u as SmUInt = SmCUInt(floor(x))
+      if SmCFloat(u) = x then
+        ValueSetSmUInt(outV, u)
       else
         CalcRoundingFnHugeAsFloat(fnId, x, outV)
       end if
@@ -5793,50 +6033,50 @@ private sub calcRoundingFn(byval fnId as Integer, byref scalarV as ScalarValue, 
       CalcRoundingFnHugeAsFloat(fnId, x, outV)
     end if
   else
-    dim rounded as LongInt = 0
+    dim rounded as SmInt = 0
     select case fnId
       case FUNC_INT, FUNC_TRUNC
-        rounded = CLngInt(Fix(x))
+        rounded = SmCInt(Fix(x))
       case FUNC_FLOOR
-        rounded = CLngInt(Int(x))
+        rounded = SmCInt(Int(x))
       case FUNC_CEIL
-        rounded = CLngInt(-Int(-x))
+        rounded = SmCInt(-Int(-x))
       case FUNC_ROUND
         if x >= 0 then
-          rounded = CLngInt(Int(x + 0.5))
+          rounded = SmCInt(RoundHalfUpNonNegFloat(x))
         else
-          rounded = CLngInt(-Int(-x + 0.5))
+          rounded = SmCInt(-RoundHalfUpNonNegFloat(-x))
         end if
     end select
-    ValueSetInt64(outV, rounded)
+    ValueSetSmInt(outV, rounded)
   end if
 end sub
 
-declare sub ScalarSnapComplexNearZeroAxis(byref zr as Double, byref zi as Double)
-declare sub ScalarPrincipalLnCartesian(byval ar as Double, byval ai as Double, byref outR as Double, byref outI as Double)
+declare sub ScalarSnapComplexNearZeroAxis(byref zr as SmFloat, byref zi as SmFloat)
+declare sub ScalarPrincipalLnCartesian(byval ar as SmFloat, byval ai as SmFloat, byref outR as SmFloat, byref outI as SmFloat)
 
 private function ApplyAbsScalarValue(byref scalarV as ScalarValue, byref outV as EvalValue) as Boolean
-  dim x as Double = scalarV.scalar
+  dim x as SmFloat = scalarV.scalar
   if IsNaNValue(x) then
     ValueSetScalar(outV, MakeNaN())
     return TRUE
   end if
-  if scalarV.exactUInt64Valid andalso scalarV.exactInt64Valid = FALSE then
-    ValueSetUInt64(outV, scalarV.exactUInt64)
+  if scalarV.exactUIntValid andalso scalarV.exactIntValid = FALSE then
+    ValueSetSmUInt(outV, scalarV.exactUInt)
     return TRUE
   end if
-  if scalarV.exactInt64Valid then
-    if scalarV.exactInt64 >= 0 then
-      ValueSetInt64(outV, scalarV.exactInt64)
-    elseif scalarV.exactInt64 = FB_I64_MIN then
-      ValueSetUInt64(outV, FB_I64_MIN_MAG_U)
+  if scalarV.exactIntValid then
+    if scalarV.exactInt >= 0 then
+      ValueSetSmInt(outV, scalarV.exactInt)
+    elseif scalarV.exactInt = SM_INT_MIN then
+      ValueSetSmUInt(outV, SM_INT_MIN_MAG)
     else
-      ValueSetInt64(outV, -scalarV.exactInt64)
+      ValueSetSmInt(outV, -scalarV.exactInt)
     end if
     return TRUE
   end if
-  if scalarV.exactUInt64Valid then
-    ValueSetUInt64(outV, scalarV.exactUInt64)
+  if scalarV.exactUIntValid then
+    ValueSetSmUInt(outV, scalarV.exactUInt)
     return TRUE
   end if
   ValueSetScalar(outV, abs(x))
@@ -5850,18 +6090,18 @@ declare sub ApplyComplexCaretPrincipalEval(byref leftS as ScalarValue, byref rig
 
 private function TryApplyUnaryComplexMathOverlay(byval fnId as Integer, byref scalarV as ScalarValue, byref outV as EvalValue) as Boolean
   if Parser_SupportComplexNumbers = FALSE then return FALSE
-  dim arU as Double = 0.0
-  dim aiU as Double = 0.0
+  dim arU as SmFloat = 0.0
+  dim aiU as SmFloat = 0.0
   ScalarLoadCartesian(scalarV, arU, aiU)
-  dim x as Double = arU
+  dim x as SmFloat = arU
   if ScalarHasNonzeroImaginaryPart(scalarV) then
       if fnId = FUNC_SQRT orelse fnId = FUNC_SQR then
         if IsNaNValue(arU) orelse IsNaNValue(aiU) then
-          ValueSetScalarComplexFromDoubles(outV, MakeNaN(), MakeNaN())
+          ValueSetScalarComplexFromFloats(outV, MakeNaN(), MakeNaN())
           return TRUE
         end if
         if fnId = FUNC_SQR then
-          ValueSetScalarComplexFromDoubles(outV, arU * arU - aiU * aiU, 2.0 * arU * aiU)
+          ValueSetScalarComplexFromFloats(outV, arU * arU - aiU * aiU, 2.0 * arU * aiU)
           return TRUE
         end if
         if fnId = FUNC_SQRT then
@@ -5870,33 +6110,33 @@ private function TryApplyUnaryComplexMathOverlay(byval fnId as Integer, byref sc
         end if
       elseif fnId = FUNC_EXP then
         if IsNaNValue(arU) orelse IsNaNValue(aiU) then
-          ValueSetScalarComplexFromDoubles(outV, MakeNaN(), MakeNaN())
+          ValueSetScalarComplexFromFloats(outV, MakeNaN(), MakeNaN())
           return TRUE
         end if
         if IsTrigRadiansInRange(aiU) = FALSE then return FALSE
-        dim ea as Double = exp(arU)
-        dim prE as Double = ea * CalcCos(aiU)
-        dim piE as Double = ea * CalcSin(aiU)
+        dim ea as SmFloat = exp(arU)
+        dim prE as SmFloat = ea * CalcCos(aiU)
+        dim piE as SmFloat = ea * CalcSin(aiU)
         ScalarSnapComplexNearZeroAxis(prE, piE)
-        ValueSetScalarComplexFromDoubles(outV, prE, piE)
+        ValueSetScalarComplexFromFloats(outV, prE, piE)
         return TRUE
       elseif fnId = FUNC_LN orelse fnId = FUNC_LOG10 then
-        dim lr as Double, li as Double
+        dim lr as SmFloat, li as SmFloat
         ScalarPrincipalLnCartesian(arU, aiU, lr, li)
         if fnId = FUNC_LN then
-          ValueSetScalarComplexFromDoubles(outV, lr, li)
+          ValueSetScalarComplexFromFloats(outV, lr, li)
         else
-          dim invL10 as Double = 1.0 / log(10.0)
-          ValueSetScalarComplexFromDoubles(outV, lr * invL10, li * invL10)
+          dim invL10 as SmFloat = 1.0 / log(10.0)
+          ValueSetScalarComplexFromFloats(outV, lr * invL10, li * invL10)
         end if
         return TRUE
       elseif (fnId = FUNC_SIN) orelse (fnId = FUNC_COS) orelse (fnId = FUNC_TAN) orelse _
              (fnId = FUNC_ASIN) orelse (fnId = FUNC_ACOS) orelse (fnId = FUNC_ATAN) orelse _
              (fnId = FUNC_SINH) orelse (fnId = FUNC_COSH) orelse (fnId = FUNC_TANH) orelse _
              (fnId = FUNC_ACOSH) orelse (fnId = FUNC_ASINH) orelse (fnId = FUNC_ATANH) then
-        dim crT as Double, ciT as Double
+        dim crT as SmFloat, ciT as SmFloat
         if ApplyUnaryComplexTrigById(fnId, arU, aiU, crT, ciT) then
-          ValueSetScalarComplexFromDoubles(outV, crT, ciT)
+          ValueSetScalarComplexFromFloats(outV, crT, ciT)
           return TRUE
         end if
       end if
@@ -5905,26 +6145,26 @@ private function TryApplyUnaryComplexMathOverlay(byval fnId as Integer, byref sc
   if (fnId = FUNC_LN orelse fnId = FUNC_LOG10) then
     if IsNonFiniteValue(x) = FALSE then
       if x < 0.0 then
-        dim lr0 as Double
-        dim li0 as Double
+        dim lr0 as SmFloat
+        dim li0 as SmFloat
         if fnId = FUNC_LN then
           lr0 = log(-x)
           li0 = FB_PI_VAL
         else
-          lr0 = log(-x) / log(10.0)
+          lr0 = LibLog10(-x)
           li0 = FB_PI_VAL / log(10.0)
         end if
         ScalarSnapComplexNearZeroAxis(lr0, li0)
-        ValueSetScalarComplexFromDoubles(outV, lr0, li0)
+        ValueSetScalarComplexFromFloats(outV, lr0, li0)
         return TRUE
       elseif x = 0.0 then
-        dim lrZ as Double, liZ as Double
+        dim lrZ as SmFloat, liZ as SmFloat
         ScalarPrincipalLnCartesian(0.0, 0.0, lrZ, liZ)
         if fnId = FUNC_LN then
-          ValueSetScalarComplexFromDoubles(outV, lrZ, liZ)
+          ValueSetScalarComplexFromFloats(outV, lrZ, liZ)
         else
-          dim invL10z as Double = 1.0 / log(10.0)
-          ValueSetScalarComplexFromDoubles(outV, lrZ * invL10z, liZ * invL10z)
+          dim invL10z as SmFloat = 1.0 / log(10.0)
+          ValueSetScalarComplexFromFloats(outV, lrZ * invL10z, liZ * invL10z)
         end if
         return TRUE
       end if
@@ -5938,9 +6178,9 @@ private function TryApplyUnaryComplexMathOverlay(byval fnId as Integer, byref sc
       outOfRealDomain = TRUE
     end if
     if outOfRealDomain then
-      dim crD as Double, ciD as Double
+      dim crD as SmFloat, ciD as SmFloat
       if ApplyUnaryComplexTrigById(fnId, x, 0.0, crD, ciD) then
-        ValueSetScalarComplexFromDoubles(outV, crD, ciD)
+        ValueSetScalarComplexFromFloats(outV, crD, ciD)
         return TRUE
       end if
     end if
@@ -5949,7 +6189,7 @@ private function TryApplyUnaryComplexMathOverlay(byval fnId as Integer, byref sc
 end function
 
 private function TryApplyUnaryRealByKind(byval fnId as Integer, byref scalarV as ScalarValue, byref outV as EvalValue) as Boolean
-  dim x as Double = scalarV.scalar
+  dim x as SmFloat = scalarV.scalar
   select case K_BUILTIN_META_ROWS(fnId).unaryScalarKind
     case USK_PRIMARY_TRIG
       if IsTrigRadiansInRange(x) = FALSE then return FALSE
@@ -5980,7 +6220,7 @@ private function TryApplyUnaryRealByKind(byval fnId as Integer, byref scalarV as
       if fnId = FUNC_ACOSH then
         ValueSetScalar(outV, acosh(x))
       elseif fnId = FUNC_ASINH then
-        if abs(x) > 1e150 andalso IsNonFiniteValue(x) = FALSE then
+        if abs(x) > SM_LARGE_MAGNITUDE_MIN andalso IsNonFiniteValue(x) = FALSE then
           ValueSetScalar(outV, Sgn(x) * (log(abs(x)) + log(2.0)))
         else
           ValueSetScalar(outV, asinh(x))
@@ -5993,7 +6233,7 @@ private function TryApplyUnaryRealByKind(byval fnId as Integer, byref scalarV as
     case USK_LN
       ValueSetScalar(outV, log(x))
     case USK_LOG10
-      ValueSetScalar(outV, log(x) / log(10.0))
+      ValueSetScalar(outV, LibLog10(x))
     case USK_SQRT
       ApplyUnarySqrtEval(scalarV, outV)
     case USK_SQR
@@ -6008,27 +6248,27 @@ private function TryApplyUnaryRealByKind(byval fnId as Integer, byref scalarV as
       return ApplyAbsScalarValue(scalarV, outV)
     case USK_SIGN
       if IsNaNValue(x) then
-        ValueSetInt64(outV, 0)
-      elseif scalarV.exactInt64Valid then
-        if scalarV.exactInt64 > 0 then
-          ValueSetInt64(outV, 1)
-        elseif scalarV.exactInt64 < 0 then
-          ValueSetInt64(outV, -1)
+        ValueSetScalar(outV, x)
+      elseif scalarV.exactIntValid then
+        if scalarV.exactInt > 0 then
+          ValueSetSmInt(outV, 1)
+        elseif scalarV.exactInt < 0 then
+          ValueSetSmInt(outV, -1)
         else
-          ValueSetInt64(outV, 0)
+          ValueSetSmInt(outV, 0)
         end if
-      elseif scalarV.exactUInt64Valid then
-        if scalarV.exactUInt64 = 0 then
-          ValueSetInt64(outV, 0)
+      elseif scalarV.exactUIntValid then
+        if scalarV.exactUInt = 0 then
+          ValueSetSmInt(outV, 0)
         else
-          ValueSetInt64(outV, 1)
+          ValueSetSmInt(outV, 1)
         end if
       elseif x > 0 then
-        ValueSetInt64(outV, 1)
+        ValueSetSmInt(outV, 1)
       elseif x < 0 then
-        ValueSetInt64(outV, -1)
+        ValueSetSmInt(outV, -1)
       else
-        ValueSetInt64(outV, 0)
+        ValueSetSmInt(outV, 0)
       end if
     case USK_DEG
       ValueSetScalar(outV, x * 180.0 / FB_PI_VAL)
@@ -6058,18 +6298,18 @@ private function MapUnaryEvalValueById(byval fnId as Integer, byref inV as EvalV
   return TRUE
 end function
 
-private sub ValueFromTimeMs(byval ms as LongInt, byval fnId as Integer, byref outV as EvalValue)
+private sub ValueFromTimeMs(byval ms as SmInt, byval fnId as Integer, byref outV as EvalValue)
   select case fnId
     case FUNC_MILLISECONDS
-      ValueSetInt64(outV, ms)
+      ValueSetSmInt(outV, ms)
     case FUNC_SECONDS
-      ValueSetScalar(outV, CDbl(ms) / 1000.0)
+      ValueSetScalar(outV, SmCFloat(ms) / 1000.0)
     case FUNC_MINUTES
-      ValueSetScalar(outV, CDbl(ms) / 60000.0)
+      ValueSetScalar(outV, SmCFloat(ms) / 60000.0)
     case FUNC_HOURS
-      ValueSetScalar(outV, CDbl(ms) / 3600000.0)
+      ValueSetScalar(outV, SmCFloat(ms) / 3600000.0)
     case else
-      ValueSetScalar(outV, CDbl(ms) / 86400000.0)
+      ValueSetScalar(outV, SmCFloat(ms) / 86400000.0)
   end select
 end sub
 
@@ -6106,16 +6346,16 @@ private function TryNormalizeUnaryScalarInput(byref inV as EvalValue, byref outS
   return FALSE
 end function
 
-private function TryCartFromPolarScalars(byval rMag as Double, byval rAng as Double, byref outV as EvalValue) as Boolean
+private function TryCartFromPolarScalars(byval rMag as SmFloat, byval rAng as SmFloat, byref outV as EvalValue) as Boolean
   if Parser_SupportComplexNumbers = FALSE then
-    if abs(rAng) > 1e-14 then
+    if abs(rAng) > SM_TOL_LOST1 then
       SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
       return FALSE
     end if
   end if
-  dim cr as Double = rMag * CalcCos(rAng)
-  dim ci as Double = rMag * CalcSin(rAng)
-  ValueSetScalarComplexFromDoubles(outV, cr, ci)
+  dim cr as SmFloat = rMag * CalcCos(rAng)
+  dim ci as SmFloat = rMag * CalcSin(rAng)
+  ValueSetScalarComplexFromFloats(outV, cr, ci)
   return TRUE
 end function
 
@@ -6137,13 +6377,13 @@ private function TryBuiltinPolarCart(byval fnId as Integer, byref fnName as Stri
     if cartIn.kind = VK_ARRAY then
       dim nCart as Integer = ValueArrayLen(cartIn)
       if nCart = 1 then
-        dim rOnly as Double = cartIn.arr(lbound(cartIn.arr)).scalar
-        if TryCartFromPolarScalars(rOnly, 0.0, outV) = FALSE andalso parseError = 0 then SetNumericErrorInFunction(fnName)
+        dim rOnly as SmFloat = cartIn.arr(lbound(cartIn.arr)).scalar
+        if TryCartFromPolarScalars(rOnly, 0.0, outV) = FALSE andalso parseError = FALSE then SetNumericErrorInFunction(fnName)
         return TRUE
       elseif nCart = 2 then
-        dim rMagA as Double = cartIn.arr(lbound(cartIn.arr)).scalar
-        dim rAngA as Double = cartIn.arr(lbound(cartIn.arr) + 1).scalar
-        if TryCartFromPolarScalars(rMagA, rAngA, outV) = FALSE andalso parseError = 0 then SetNumericErrorInFunction(fnName)
+        dim rMagA as SmFloat = cartIn.arr(lbound(cartIn.arr)).scalar
+        dim rAngA as SmFloat = cartIn.arr(lbound(cartIn.arr) + 1).scalar
+        if TryCartFromPolarScalars(rMagA, rAngA, outV) = FALSE andalso parseError = FALSE then SetNumericErrorInFunction(fnName)
         return TRUE
       end if
     end if
@@ -6158,7 +6398,7 @@ private function TryBuiltinPolarCart(byval fnId as Integer, byref fnName as Stri
       SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
       return TRUE
     end if
-    if TryCartFromPolarScalars(args(0).scalar, args(1).scalar, outV) = FALSE andalso parseError = 0 then SetNumericErrorInFunction(fnName)
+    if TryCartFromPolarScalars(args(0).scalar, args(1).scalar, outV) = FALSE andalso parseError = FALSE then SetNumericErrorInFunction(fnName)
     return TRUE
   end if
   return FALSE
@@ -6169,18 +6409,18 @@ private function ApplyUnaryFunction(byref fn as String, byref v as EvalValue, by
   return MapUnaryEvalValueById(fnId, v, outV)
 end function
 
-private sub ScalarComplexPowIntegerNonneg(byval ar as Double, byval ai as Double, byval n as LongInt, byref outR as Double, byref outI as Double)
+private sub ScalarComplexPowIntegerNonneg(byval ar as SmFloat, byval ai as SmFloat, byval n as SmInt, byref outR as SmFloat, byref outI as SmFloat)
   if n <= 0 then
     outR = 1.0
     outI = 0.0
     exit sub
   end if
-  dim cr as Double = 1.0
-  dim ci as Double = 0.0
-  dim k as LongInt
+  dim cr as SmFloat = 1.0
+  dim ci as SmFloat = 0.0
+  dim k as SmInt
   for k = 1 to n
-    dim nr as Double = cr * ar - ci * ai
-    dim ni as Double = cr * ai + ci * ar
+    dim nr as SmFloat = cr * ar - ci * ai
+    dim ni as SmFloat = cr * ai + ci * ar
     cr = nr
     ci = ni
   next k
@@ -6188,32 +6428,32 @@ private sub ScalarComplexPowIntegerNonneg(byval ar as Double, byval ai as Double
   outI = ci
 end sub
 
-private sub ScalarSnapComplexNearZeroAxis(byref zr as Double, byref zi as Double)
+private sub ScalarSnapComplexNearZeroAxis(byref zr as SmFloat, byref zi as SmFloat)
   if IsNonFiniteValue(zr) orelse IsNonFiniteValue(zi) then exit sub
-  const relEps as Double = 1e-13
-  dim scaleI as Double = abs(zi)
+  const relEps as SmFloat = SM_TOL_LOST2
+  dim scaleI as SmFloat = abs(zi)
   if scaleI < 1.0 then scaleI = 1.0
   if abs(zr) <= relEps * scaleI then zr = 0.0
-  dim scaleR as Double = abs(zr)
+  dim scaleR as SmFloat = abs(zr)
   if scaleR < 1.0 then scaleR = 1.0
   if abs(zi) <= relEps * scaleR then zi = 0.0
 end sub
 
 '' Principal branch: ln(z) = ln|z| + i*arg(z); ln(0) -> (-inf, 0).
-private sub ScalarPrincipalLnCartesian(byval ar as Double, byval ai as Double, byref outR as Double, byref outI as Double)
+private sub ScalarPrincipalLnCartesian(byval ar as SmFloat, byval ai as SmFloat, byref outR as SmFloat, byref outI as SmFloat)
   if IsNaNValue(ar) orelse IsNaNValue(ai) then
     outR = MakeNaN()
     outI = MakeNaN()
     exit sub
   end if
-  dim mag as Double = CalcHypot(ar, ai)
+  dim mag as SmFloat = CalcHypot(ar, ai)
   if mag = 0.0 then
     outR = -1.0 / 0.0
     outI = 0.0
     exit sub
   end if
-  const axisEps as Double = 1e-15
-  dim axScale as Double = abs(ar)
+  const axisEps as SmFloat = SM_TOL_LOST0
+  dim axScale as SmFloat = abs(ar)
   if axScale < 1.0 then axScale = 1.0
   if abs(ai) <= axisEps * axScale andalso ar < 0.0 then
     outR = log(-ar)
@@ -6226,8 +6466,8 @@ private sub ScalarPrincipalLnCartesian(byval ar as Double, byval ai as Double, b
   ScalarSnapComplexNearZeroAxis(outR, outI)
 end sub
 
-private sub ScalarComplexDivide(byval numR as Double, byval numI as Double, byval denR as Double, byval denI as Double, byref outR as Double, byref outI as Double)
-  dim den as Double = denR * denR + denI * denI
+private sub ScalarComplexDivide(byval numR as SmFloat, byval numI as SmFloat, byval denR as SmFloat, byval denI as SmFloat, byref outR as SmFloat, byref outI as SmFloat)
+  dim den as SmFloat = denR * denR + denI * denI
   if den = 0.0 then
     outR = MakeNaN()
     outI = MakeNaN()
@@ -6238,7 +6478,7 @@ private sub ScalarComplexDivide(byval numR as Double, byval numI as Double, byva
 end sub
 
 '' Cartesian product; avoid spurious NaN from 0*inf when a factor is purely real or imaginary.
-private sub ScalarComplexCartesianMul(byval ar as Double, byval ai as Double, byval br as Double, byval bi as Double, byref outR as Double, byref outI as Double)
+private sub ScalarComplexCartesianMul(byval ar as SmFloat, byval ai as SmFloat, byval br as SmFloat, byval bi as SmFloat, byref outR as SmFloat, byref outI as SmFloat)
   if (ai = 0.0 andalso not IsNaNValue(ai)) andalso br = 0.0 then
     outR = 0.0
   elseif bi = 0.0 then
@@ -6260,30 +6500,30 @@ private sub ScalarComplexCartesianMul(byval ar as Double, byval ai as Double, by
   end if
 end sub
 
-private function ScalarComplexExpCartesian(byval ar as Double, byval ai as Double, byref outR as Double, byref outI as Double) as Boolean
+private function ScalarComplexExpCartesian(byval ar as SmFloat, byval ai as SmFloat, byref outR as SmFloat, byref outI as SmFloat) as Boolean
   if IsTrigRadiansInRange(ai) = FALSE then return FALSE
-  dim ea as Double = exp(ar)
+  dim ea as SmFloat = exp(ar)
   outR = ea * CalcCos(ai)
   outI = ea * CalcSin(ai)
   return TRUE
 end function
 
 '' Principal root: (ar + ai*i)^(invN) via polar form (invN = 1/2 for sqrt, 1/n for odd unit root).
-private sub ScalarComplexCartesianPrincipalNthRoot(byval ar as Double, byval ai as Double, byval invN as Double, byref outR as Double, byref outI as Double)
+private sub ScalarComplexCartesianPrincipalNthRoot(byval ar as SmFloat, byval ai as SmFloat, byval invN as SmFloat, byref outR as SmFloat, byref outI as SmFloat)
   if IsNaNValue(ar) orelse IsNaNValue(ai) then
     outR = MakeNaN()
     outI = MakeNaN()
     exit sub
   end if
-  dim mag as Double = CalcHypot(ar, ai)
+  dim mag as SmFloat = CalcHypot(ar, ai)
   if mag = 0.0 then
     outR = 0.0
     outI = 0.0
     exit sub
   end if
-  dim angN as Double = CalcAtan2(ai, ar) * invN
-  dim rmN as Double
-  if abs(invN - 0.5) < 1e-12 then
+  dim angN as SmFloat = CalcAtan2(ai, ar) * invN
+  dim rmN as SmFloat
+  if abs(invN - 0.5) < SM_TOL_LOST3 then
     rmN = sqr(mag)
   else
     rmN = exp(log(mag) * invN)
@@ -6293,20 +6533,20 @@ private sub ScalarComplexCartesianPrincipalNthRoot(byval ar as Double, byval ai 
   ScalarSnapComplexNearZeroAxis(outR, outI)
 end sub
 
-private sub ScalarComplexPrincipalSqrt(byval ar as Double, byval ai as Double, byref outR as Double, byref outI as Double)
+private sub ScalarComplexPrincipalSqrt(byval ar as SmFloat, byval ai as SmFloat, byref outR as SmFloat, byref outI as SmFloat)
   ScalarComplexCartesianPrincipalNthRoot(ar, ai, 0.5, outR, outI)
 end sub
 
-private sub ScalarLnOfTwice(byval ar as Double, byval ai as Double, byref outR as Double, byref outI as Double)
+private sub ScalarLnOfTwice(byval ar as SmFloat, byval ai as SmFloat, byref outR as SmFloat, byref outI as SmFloat)
   ScalarPrincipalLnCartesian(ar, ai, outR, outI)
   outR = outR + log(2.0)
 end sub
 
-private function MagnitudeAtLeast(byval ar as Double, byval ai as Double, byval limit as Double) as Boolean
+private function MagnitudeAtLeast(byval ar as SmFloat, byval ai as SmFloat, byval limit as SmFloat) as Boolean
   return abs(ar) >= limit orelse abs(ai) >= limit
 end function
 
-private function ApplyUnaryComplexTrigById(byval fnId as Integer, byval ar as Double, byval ai as Double, byref outR as Double, byref outI as Double) as Boolean
+private function ApplyUnaryComplexTrigById(byval fnId as Integer, byval ar as SmFloat, byval ai as SmFloat, byref outR as SmFloat, byref outI as SmFloat) as Boolean
   if IsUnaryTrigFnId(fnId) then
     if IsTrigCartesianInRange(ar, ai) = FALSE then return FALSE
   elseif IsNaNValue(ar) orelse IsNaNValue(ai) then
@@ -6329,10 +6569,10 @@ private function ApplyUnaryComplexTrigById(byval fnId as Integer, byval ar as Do
       outR = cosh(ar) * CalcCos(ai)
       outI = sinh(ar) * CalcSin(ai)
     case FUNC_TAN, FUNC_TANH
-      dim numR as Double
-      dim numI as Double
-      dim denR as Double
-      dim denI as Double
+      dim numR as SmFloat
+      dim numI as SmFloat
+      dim denR as SmFloat
+      dim denI as SmFloat
       if fnId = FUNC_TAN then
         numR = CalcSin(ar) * cosh(ai)
         numI = CalcCos(ar) * sinh(ai)
@@ -6346,13 +6586,13 @@ private function ApplyUnaryComplexTrigById(byval fnId as Integer, byval ar as Do
       end if
       ScalarComplexDivide(numR, numI, denR, denI, outR, outI)
     case FUNC_ASINH
-      dim z2r as Double = ar * ar - ai * ai
-      dim z2i as Double = 2.0 * ar * ai
-      dim sqrR as Double
-      dim sqrI as Double
+      dim z2r as SmFloat = ar * ar - ai * ai
+      dim z2i as SmFloat = 2.0 * ar * ai
+      dim sqrR as SmFloat
+      dim sqrI as SmFloat
       ScalarComplexPrincipalSqrt(z2r + 1.0, z2i, sqrR, sqrI)
-      dim sumR as Double = ar + sqrR
-      dim sumI as Double = ai + sqrI
+      dim sumR as SmFloat = ar + sqrR
+      dim sumI as SmFloat = ai + sqrI
       ScalarPrincipalLnCartesian(sumR, sumI, outR, outI)
     case FUNC_ACOSH
       if ai = 0.0 andalso IsNonFiniteValue(ar) = FALSE then
@@ -6367,42 +6607,42 @@ private function ApplyUnaryComplexTrigById(byval fnId as Integer, byval ar as Do
           exit select
         end if
       end if
-      if IsNonFiniteValue(ar) = FALSE andalso IsNonFiniteValue(ai) = FALSE andalso MagnitudeAtLeast(ar, ai, 1e8) then
+      if IsNonFiniteValue(ar) = FALSE andalso IsNonFiniteValue(ai) = FALSE andalso MagnitudeAtLeast(ar, ai, SM_ACOSH_LOG_MIN) then
         ScalarLnOfTwice(ar, ai, outR, outI)
         exit select
       end if
-      dim s1r as Double, s1i as Double, s2r as Double, s2i as Double
+      dim s1r as SmFloat, s1i as SmFloat, s2r as SmFloat, s2i as SmFloat
       ScalarComplexPrincipalSqrt(ar - 1.0, ai, s1r, s1i)
       ScalarComplexPrincipalSqrt(ar + 1.0, ai, s2r, s2i)
-      dim wr as Double = s1r * s2r - s1i * s2i
-      dim wi as Double = s1r * s2i + s1i * s2r
+      dim wr as SmFloat = s1r * s2r - s1i * s2i
+      dim wi as SmFloat = s1r * s2i + s1i * s2r
       ScalarPrincipalLnCartesian(ar + wr, ai + wi, outR, outI)
     case FUNC_ATANH
-      dim numTr as Double = 1.0 + ar
-      dim numTi as Double = ai
-      dim denTr as Double = 1.0 - ar
-      dim denTi as Double = -ai
-      dim quotR as Double
-      dim quotI as Double
+      dim numTr as SmFloat = 1.0 + ar
+      dim numTi as SmFloat = ai
+      dim denTr as SmFloat = 1.0 - ar
+      dim denTi as SmFloat = -ai
+      dim quotR as SmFloat
+      dim quotI as SmFloat
       ScalarComplexDivide(numTr, numTi, denTr, denTi, quotR, quotI)
-      dim lnR as Double
-      dim lnI as Double
+      dim lnR as SmFloat
+      dim lnI as SmFloat
       ScalarPrincipalLnCartesian(quotR, quotI, lnR, lnI)
       outR = lnR * 0.5
       outI = lnI * 0.5
     case FUNC_ASIN
       if ai = 0.0 andalso IsNonFiniteValue(ar) = FALSE andalso abs(ar) > 1.0 then
-        dim ah as Double = acosh(abs(ar))
-        dim signX as Double = iif(ar < 0.0, -1.0, 1.0)
+        dim ah as SmFloat = acosh(abs(ar))
+        dim signX as SmFloat = iif(ar < 0.0, -1.0, 1.0)
         outR = signX * (FB_PI_VAL * 0.5)
         outI = -signX * ah
         exit select
       end if
-      if IsNonFiniteValue(ar) = FALSE andalso IsNonFiniteValue(ai) = FALSE andalso MagnitudeAtLeast(ar, ai, 1e150) then
+      if IsNonFiniteValue(ar) = FALSE andalso IsNonFiniteValue(ai) = FALSE andalso MagnitudeAtLeast(ar, ai, SM_LARGE_MAGNITUDE_MIN) then
         dim negA as Boolean = (ar < 0.0)
-        dim br as Double = iif(negA, -ar, ar)
-        dim bi as Double = iif(negA, -ai, ai)
-        dim lr as Double, li as Double
+        dim br as SmFloat = iif(negA, -ar, ar)
+        dim bi as SmFloat = iif(negA, -ai, ai)
+        dim lr as SmFloat, li as SmFloat
         ScalarLnOfTwice(br, bi, lr, li)
         outR = FB_PI_VAL * 0.5 + li
         outI = -lr
@@ -6412,43 +6652,43 @@ private function ApplyUnaryComplexTrigById(byval fnId as Integer, byval ar as Do
         end if
         exit select
       end if
-      dim izR as Double = -ai
-      dim izI as Double = ar
-      dim z2rA as Double = ar * ar - ai * ai
-      dim z2iA as Double = 2.0 * ar * ai
-      dim oneMz2r as Double = 1.0 - z2rA
-      dim oneMz2i as Double = -z2iA
-      dim sqrRa as Double
-      dim sqrIa as Double
+      dim izR as SmFloat = -ai
+      dim izI as SmFloat = ar
+      dim z2rA as SmFloat = ar * ar - ai * ai
+      dim z2iA as SmFloat = 2.0 * ar * ai
+      dim oneMz2r as SmFloat = 1.0 - z2rA
+      dim oneMz2i as SmFloat = -z2iA
+      dim sqrRa as SmFloat
+      dim sqrIa as SmFloat
       ScalarComplexPrincipalSqrt(oneMz2r, oneMz2i, sqrRa, sqrIa)
-      dim wR as Double = izR + sqrRa
-      dim wI as Double = izI + sqrIa
-      dim lnRa as Double
-      dim lnIa as Double
+      dim wR as SmFloat = izR + sqrRa
+      dim wI as SmFloat = izI + sqrIa
+      dim lnRa as SmFloat
+      dim lnIa as SmFloat
       ScalarPrincipalLnCartesian(wR, wI, lnRa, lnIa)
       outR = lnIa
       outI = -lnRa
     case FUNC_ACOS
-      dim asR as Double
-      dim asI as Double
+      dim asR as SmFloat
+      dim asI as SmFloat
       if ApplyUnaryComplexTrigById(FUNC_ASIN, ar, ai, asR, asI) = FALSE then return FALSE
       outR = FB_PI_VAL / 2.0 - asR
       outI = -asI
     case FUNC_ATAN
-      dim izr as Double = -ai
-      dim izi as Double = ar
-      dim oneMizr as Double = 1.0 - izr
-      dim oneMizi as Double = -izi
-      dim onePizr as Double = 1.0 + izr
-      dim onePizi as Double = izi
-      dim ln1mR as Double
-      dim ln1mI as Double
-      dim ln1pR as Double
-      dim ln1pI as Double
+      dim izr as SmFloat = -ai
+      dim izi as SmFloat = ar
+      dim oneMizr as SmFloat = 1.0 - izr
+      dim oneMizi as SmFloat = -izi
+      dim onePizr as SmFloat = 1.0 + izr
+      dim onePizi as SmFloat = izi
+      dim ln1mR as SmFloat
+      dim ln1mI as SmFloat
+      dim ln1pR as SmFloat
+      dim ln1pI as SmFloat
       ScalarPrincipalLnCartesian(oneMizr, oneMizi, ln1mR, ln1mI)
       ScalarPrincipalLnCartesian(onePizr, onePizi, ln1pR, ln1pI)
-      dim dR as Double = ln1mR - ln1pR
-      dim dI as Double = ln1mI - ln1pI
+      dim dR as SmFloat = ln1mR - ln1pR
+      dim dI as SmFloat = ln1mI - ln1pI
       outR = -dI * 0.5
       outI = dR * 0.5
     case else
@@ -6459,50 +6699,66 @@ private function ApplyUnaryComplexTrigById(byval fnId as Integer, byval ar as Do
 end function
 
 '' Gamma(z) via Lanczos (complex); factorial(n) uses Gamma(n+1).
-private function ScalarComplexGamma(byval zr as Double, byval zi as Double, byref outR as Double, byref outI as Double) as Boolean
+private function ScalarComplexGamma(byval zr as SmFloat, byval zi as SmFloat, byref outR as SmFloat, byref outI as SmFloat) as Boolean
   if IsNaNValue(zr) orelse IsNaNValue(zi) then
     outR = MakeNaN()
     outI = MakeNaN()
     return TRUE
   end if
-  static lanczosC(0 to 8) as Double = { _
+  if zr < 0.5 then
+    '' The Lanczos sum below loses accuracy left of Re(z) = 0.5 (fact(-10+i) was off by 2e-3):
+    '' Gamma(z) = pi / (sin(pi z) Gamma(1 - z)), with sin(pi z) = sin(pi x) cosh(pi y) + i cos(pi x) sinh(pi y).
+    dim sinPiR as SmFloat = CalcSin(FB_PI_VAL * zr) * cosh(FB_PI_VAL * zi)
+    dim sinPiI as SmFloat = CalcCos(FB_PI_VAL * zr) * sinh(FB_PI_VAL * zi)
+    dim gR as SmFloat
+    dim gI as SmFloat
+    if ScalarComplexGamma(1.0 - zr, -zi, gR, gI) = FALSE then return FALSE
+    dim denR as SmFloat
+    dim denI as SmFloat
+    ScalarComplexCartesianMul(sinPiR, sinPiI, gR, gI, denR, denI)
+    ScalarComplexDivide(FB_PI_VAL, 0.0, denR, denI, outR, outI)
+    ScalarSnapComplexNearZeroAxis(outR, outI)
+    return TRUE
+  end if
+  '' SM_FIXED_WIDTH_BEGIN: Lanczos (g = 7, n = 9) coefficients carry about 15 digits; they set the accuracy of Gamma.
+  static lanczosC(0 to 8) as SmFloat = { _
     0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, _
     -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7 }
-  const lanczosG as Double = 7.0
-  dim zmr as Double = zr - 1.0
-  dim zmi as Double = zi
-  dim xRe as Double = lanczosC(0)
-  dim xIm as Double = 0.0
+  '' SM_FIXED_WIDTH_END
+  const lanczosG as SmFloat = 7.0
+  dim zmr as SmFloat = zr - 1.0
+  dim zmi as SmFloat = zi
+  dim xRe as SmFloat = lanczosC(0)
+  dim xIm as SmFloat = 0.0
   dim i as Integer
   for i = 1 to 8
-    dim dr as Double = zmr + CDbl(i)
-    dim di as Double = zmi
-    dim quotR as Double
-    dim quotI as Double
+    dim dr as SmFloat = zmr + SmCFloat(i)
+    dim di as SmFloat = zmi
+    dim quotR as SmFloat
+    dim quotI as SmFloat
     ScalarComplexDivide(lanczosC(i), 0.0, dr, di, quotR, quotI)
     xRe += quotR
     xIm += quotI
   next i
-  dim tRe as Double = zmr + lanczosG + 0.5
-  dim tIm as Double = zmi
-  dim lnRe as Double
-  dim lnIm as Double
+  dim tRe as SmFloat = zmr + lanczosG + 0.5
+  dim tIm as SmFloat = zmi
+  dim lnRe as SmFloat
+  dim lnIm as SmFloat
   ScalarPrincipalLnCartesian(tRe, tIm, lnRe, lnIm)
-  dim pwRe as Double = zmr + 0.5
-  dim pwIm as Double = zmi
-  dim lnPowRe as Double
-  dim lnPowIm as Double
+  dim pwRe as SmFloat = zmr + 0.5
+  dim pwIm as SmFloat = zmi
+  dim lnPowRe as SmFloat
+  dim lnPowIm as SmFloat
   ScalarComplexCartesianMul(pwRe, pwIm, lnRe, lnIm, lnPowRe, lnPowIm)
-  dim powRe as Double
-  dim powIm as Double
+  dim powRe as SmFloat
+  dim powIm as SmFloat
   if ScalarComplexExpCartesian(lnPowRe, lnPowIm, powRe, powIm) = FALSE then return FALSE
-  dim expNegPrR as Double
-  dim expNegPrI as Double
+  dim expNegPrR as SmFloat
+  dim expNegPrI as SmFloat
   if ScalarComplexExpCartesian(-tRe, -tIm, expNegPrR, expNegPrI) = FALSE then return FALSE
-  dim scale as Double = sqr(2.0 * FB_PI_VAL)
-  dim prodRe as Double
-  dim prodIm as Double
-  ScalarComplexCartesianMul(scale * powRe, scale * powIm, expNegPrR, expNegPrI, prodRe, prodIm)
+  dim prodRe as SmFloat
+  dim prodIm as SmFloat
+  ScalarComplexCartesianMul(FB_SQRT_TWO_PI_VAL * powRe, FB_SQRT_TWO_PI_VAL * powIm, expNegPrR, expNegPrI, prodRe, prodIm)
   ScalarComplexCartesianMul(prodRe, prodIm, xRe, xIm, outR, outI)
   ScalarSnapComplexNearZeroAxis(outR, outI)
   return TRUE
@@ -6510,52 +6766,52 @@ end function
 
 '' intV/uintV before flag fields: avoids x86_64 UDT padding bugs with leading Boolean/Integer sentinels.
 private type ExactCartesianComponent
-  intV as LongInt
-  uintV as ULongInt
-  hasInt as Integer
-  hasUInt as Integer
+  intV as SmInt
+  uintV as SmUInt
+  hasInt as Boolean
+  hasUInt as Boolean
 end type
 
 private sub ExactCartesianComponentClear(byref c as ExactCartesianComponent)
-  c.hasInt = 0
+  c.hasInt = FALSE
   c.intV = 0
-  c.hasUInt = 0
+  c.hasUInt = FALSE
   c.uintV = 0
 end sub
 
-'' Signed int64 with two's-complement uint companion (negative values included).
-private sub ExactCartesianComponentAssignFromSignedInt64(byref c as ExactCartesianComponent, byval n as LongInt)
+'' Signed SmInt with two's-complement uint companion (negative values included).
+private sub ExactCartesianComponentAssignFromSignedInt(byref c as ExactCartesianComponent, byval n as SmInt)
   ExactCartesianComponentClear(c)
-  c.hasInt = 1
+  c.hasInt = TRUE
   c.intV = n
-  c.hasUInt = 1
-  c.uintV = CULngInt(n)
+  c.hasUInt = TRUE
+  c.uintV = SmCUInt(n)
 end sub
 
-private sub ExactCartesianComponentAssignFromInt64(byref c as ExactCartesianComponent, byval n as LongInt)
-  ExactCartesianComponentAssignFromSignedInt64(c, n)
+private sub ExactCartesianComponentAssignFromSmInt(byref c as ExactCartesianComponent, byval n as SmInt)
+  ExactCartesianComponentAssignFromSignedInt(c, n)
 end sub
 
-private sub ExactCartesianComponentAssignFromUInt64(byref c as ExactCartesianComponent, byval u as ULongInt)
+private sub ExactCartesianComponentAssignFromSmUInt(byref c as ExactCartesianComponent, byval u as SmUInt)
   ExactCartesianComponentClear(c)
-  c.hasUInt = 1
+  c.hasUInt = TRUE
   c.uintV = u
-  if u <= FB_I64_MAX_U then
-    c.hasInt = 1
-    c.intV = CLngInt(u)
+  if u <= SM_INT_MAX_U then
+    c.hasInt = TRUE
+    c.intV = SmCInt(u)
   end if
 end sub
 
-private function TryExactCartesianComponentToInt64(byref c as ExactCartesianComponent, byref outI as LongInt) as Boolean
-  if c.hasInt <> 0 then
+private function TryExactCartesianComponentToSmInt(byref c as ExactCartesianComponent, byref outI as SmInt) as Boolean
+  if c.hasInt then
     outI = c.intV
     return TRUE
   end if
-  if c.hasUInt <> 0 andalso c.uintV <= FB_I64_MAX_U then
-    outI = CLngInt(c.uintV)
+  if c.hasUInt andalso c.uintV <= SM_INT_MAX_U then
+    outI = SmCInt(c.uintV)
     return TRUE
   end if
-  if c.hasInt = 0 andalso c.hasUInt = 0 then
+  if c.hasInt = FALSE andalso c.hasUInt = FALSE then
     outI = 0
     return TRUE
   end if
@@ -6566,63 +6822,63 @@ private function TryExtractExactCartesianComponent(byval isImag as Boolean, byre
   ScalarRepairExactMetadata(sv)
   if isImag = FALSE then
     if ScalarHasRenderRational(sv) then return FALSE
-    if ScalarExactInt64Valid(sv) then
-      ExactCartesianComponentAssignFromInt64(c, sv.exactInt64)
-      if sv.exactInt64 < 0 andalso ScalarExactUInt64Valid(sv) then
-        c.hasUInt = 1
-        c.uintV = sv.exactUInt64
+    if ScalarExactSmIntValid(sv) then
+      ExactCartesianComponentAssignFromSmInt(c, sv.exactInt)
+      if sv.exactInt < 0 andalso ScalarExactSmUIntValid(sv) then
+        c.hasUInt = TRUE
+        c.uintV = sv.exactUInt
       end if
       return TRUE
     end if
-    if sv.scalarStorageKind = SSK_INT64 then
-      ExactCartesianComponentAssignFromInt64(c, sv.exactInt64)
-      if sv.exactInt64 < 0 andalso sv.exactUInt64 <> 0 then
-        c.hasUInt = 1
-        c.uintV = sv.exactUInt64
+    if sv.scalarStorageKind = SSK_SMINT then
+      ExactCartesianComponentAssignFromSmInt(c, sv.exactInt)
+      if sv.exactInt < 0 andalso sv.exactUInt <> 0 then
+        c.hasUInt = TRUE
+        c.uintV = sv.exactUInt
       end if
       return TRUE
     end if
-    if ScalarExactUInt64Valid(sv) then
-      ExactCartesianComponentAssignFromUInt64(c, sv.exactUInt64)
+    if ScalarExactSmUIntValid(sv) then
+      ExactCartesianComponentAssignFromSmUInt(c, sv.exactUInt)
       return TRUE
     end if
-    if sv.scalarStorageKind = SSK_UINT64 then
-      ExactCartesianComponentAssignFromUInt64(c, sv.exactUInt64)
+    if sv.scalarStorageKind = SSK_SMUINT then
+      ExactCartesianComponentAssignFromSmUInt(c, sv.exactUInt)
       return TRUE
     end if
-    dim tRe as LongInt
-    if TryGetExactInt64FromDouble(sv.scalar, tRe) then
-      ExactCartesianComponentAssignFromInt64(c, tRe)
+    dim tRe as SmInt
+    if TryGetExactSmIntFromFloat(sv.scalar, tRe) then
+      ExactCartesianComponentAssignFromSmInt(c, tRe)
       return TRUE
     end if
     return FALSE
   end if
 
   if ScalarHasImagRenderRational(sv) then return FALSE
-  if ScalarImagExactInt64Valid(sv) then
-    if sv.imagExactInt64 = 0 andalso sv.imag <> 0.0 then return FALSE
-    ExactCartesianComponentAssignFromInt64(c, sv.imagExactInt64)
-    if sv.imagExactInt64 < 0 andalso ScalarImagExactUInt64Valid(sv) then
-      c.hasUInt = 1
-      c.uintV = sv.imagExactUInt64
+  if ScalarImagExactSmIntValid(sv) then
+    if sv.imagExactInt = 0 andalso sv.imag <> 0.0 then return FALSE
+    ExactCartesianComponentAssignFromSmInt(c, sv.imagExactInt)
+    if sv.imagExactInt < 0 andalso ScalarImagExactSmUIntValid(sv) then
+      c.hasUInt = TRUE
+      c.uintV = sv.imagExactUInt
     end if
     return TRUE
   end if
-  if ScalarImagExactUInt64Valid(sv) then
-    ExactCartesianComponentAssignFromUInt64(c, sv.imagExactUInt64)
+  if ScalarImagExactSmUIntValid(sv) then
+    ExactCartesianComponentAssignFromSmUInt(c, sv.imagExactUInt)
     return TRUE
   end if
   if ScalarImagExactMetadataMatchesFloat(sv) then
-    if ScalarImagExactInt64MetadataValid(sv) then
-      ExactCartesianComponentAssignFromInt64(c, sv.imagExactInt64)
-      if sv.imagExactInt64 < 0 andalso ScalarImagExactUInt64MetadataValid(sv) then
-        c.hasUInt = 1
-        c.uintV = sv.imagExactUInt64
+    if ScalarImagExactSmIntMetadataValid(sv) then
+      ExactCartesianComponentAssignFromSmInt(c, sv.imagExactInt)
+      if sv.imagExactInt < 0 andalso ScalarImagExactSmUIntMetadataValid(sv) then
+        c.hasUInt = TRUE
+        c.uintV = sv.imagExactUInt
       end if
       return TRUE
     end if
-    if ScalarImagExactUInt64MetadataValid(sv) then
-      ExactCartesianComponentAssignFromUInt64(c, sv.imagExactUInt64)
+    if ScalarImagExactSmUIntMetadataValid(sv) then
+      ExactCartesianComponentAssignFromSmUInt(c, sv.imagExactUInt)
       return TRUE
     end if
   end if
@@ -6630,10 +6886,10 @@ private function TryExtractExactCartesianComponent(byval isImag as Boolean, byre
     ExactCartesianComponentClear(c)
     return TRUE
   end if
-  dim tIm as LongInt
-  if TryGetExactInt64FromDouble(sv.imag, tIm) then
+  dim tIm as SmInt
+  if TryGetExactSmIntFromFloat(sv.imag, tIm) then
     if tIm = 0 andalso sv.imag <> 0.0 then return FALSE
-    ExactCartesianComponentAssignFromInt64(c, tIm)
+    ExactCartesianComponentAssignFromSmInt(c, tIm)
     return TRUE
   end if
   return FALSE
@@ -6648,14 +6904,14 @@ private function TryExtractExactImagComponent(byref sv as ScalarValue, byref c a
 end function
 
 private sub ValueSetScalarFromExactCartesianComponent(byref v as EvalValue, byref c as ExactCartesianComponent)
-  if c.hasInt <> 0 then
-    ValueSetInt64(v, c.intV)
-    if c.intV < 0 andalso c.hasUInt <> 0 then
-      ScalarSetExactUInt64Valid(v.scalarValue, TRUE)
-      v.scalarValue.exactUInt64 = c.uintV
+  if c.hasInt then
+    ValueSetSmInt(v, c.intV)
+    if c.intV < 0 andalso c.hasUInt then
+      ScalarSetExactSmUIntValid(v.scalarValue, TRUE)
+      v.scalarValue.exactUInt = c.uintV
     end if
-  elseif c.hasUInt <> 0 then
-    ValueSetUInt64(v, c.uintV)
+  elseif c.hasUInt then
+    ValueSetSmUInt(v, c.uintV)
   else
     ValueSetScalar(v, 0.0)
   end if
@@ -6663,30 +6919,30 @@ private sub ValueSetScalarFromExactCartesianComponent(byref v as EvalValue, byre
 end sub
 
 private sub ScalarApplyExactImagFromCartesianComponent(byref sv as ScalarValue, byref c as ExactCartesianComponent)
-  ScalarSetImagExactInt64Valid(sv, FALSE)
-  ScalarSetImagExactUInt64Valid(sv, FALSE)
-  sv.imagExactInt64 = 0
-  sv.imagExactUInt64 = 0
+  ScalarSetImagExactSmIntValid(sv, FALSE)
+  ScalarSetImagExactSmUIntValid(sv, FALSE)
+  sv.imagExactInt = 0
+  sv.imagExactUInt = 0
   sv.imag = 0.0
-  if c.hasInt = 0 andalso c.hasUInt = 0 then exit sub
-  if c.hasInt <> 0 then
-    ScalarSetImagExactInt64Valid(sv, TRUE)
-    sv.imagExactInt64 = c.intV
-    sv.imag = CDbl(c.intV)
-    if c.hasUInt <> 0 then
-      ScalarSetImagExactUInt64Valid(sv, TRUE)
-      sv.imagExactUInt64 = c.uintV
+  if c.hasInt = FALSE andalso c.hasUInt = FALSE then exit sub
+  if c.hasInt then
+    ScalarSetImagExactSmIntValid(sv, TRUE)
+    sv.imagExactInt = c.intV
+    sv.imag = SmCFloat(c.intV)
+    if c.hasUInt then
+      ScalarSetImagExactSmUIntValid(sv, TRUE)
+      sv.imagExactUInt = c.uintV
     else
-      ScalarSetImagExactUInt64Valid(sv, TRUE)
-      sv.imagExactUInt64 = CULngInt(c.intV)
+      ScalarSetImagExactSmUIntValid(sv, TRUE)
+      sv.imagExactUInt = SmCUInt(c.intV)
     end if
   else
-    ScalarSetImagExactUInt64Valid(sv, TRUE)
-    sv.imagExactUInt64 = c.uintV
-    sv.imag = CDbl(c.uintV)
-    if c.uintV <= FB_I64_MAX_U then
-      ScalarSetImagExactInt64Valid(sv, TRUE)
-      sv.imagExactInt64 = CLngInt(c.uintV)
+    ScalarSetImagExactSmUIntValid(sv, TRUE)
+    sv.imagExactUInt = c.uintV
+    sv.imag = SmCFloat(c.uintV)
+    if c.uintV <= SM_INT_MAX_U then
+      ScalarSetImagExactSmIntValid(sv, TRUE)
+      sv.imagExactInt = SmCInt(c.uintV)
     end if
   end if
   ScalarRepairExactMetadata(sv)
@@ -6702,208 +6958,232 @@ end sub
 
 private function TryApplyExactCartesianBinaryOp(byval isAdd as Boolean, byref a as ExactCartesianComponent, byref b as ExactCartesianComponent, byref result as ExactCartesianComponent) as Boolean
   ExactCartesianComponentClear(result)
-  dim ai as LongInt, bi as LongInt, oi as LongInt
-  if TryExactCartesianComponentToInt64(a, ai) andalso TryExactCartesianComponentToInt64(b, bi) then
+  dim ai as SmInt, bi as SmInt, oi as SmInt
+  if TryExactCartesianComponentToSmInt(a, ai) andalso TryExactCartesianComponentToSmInt(b, bi) then
     if isAdd then
-      if TryAddInt64(ai, bi, oi) = FALSE then return FALSE
+      if TryAddSmInt(ai, bi, oi) = FALSE then return FALSE
     else
-      if TrySubInt64(ai, bi, oi) = FALSE then return FALSE
+      if TrySubSmInt(ai, bi, oi) = FALSE then return FALSE
     end if
-    ExactCartesianComponentAssignFromInt64(result, oi)
+    ExactCartesianComponentAssignFromSmInt(result, oi)
     return TRUE
   end if
-  if isAdd andalso a.hasUInt <> 0 andalso b.hasUInt <> 0 then
-    dim ou as ULongInt
-    if TryAddULongChecked(a.uintV, b.uintV, ou) = FALSE then return FALSE
-    ExactCartesianComponentAssignFromUInt64(result, ou)
+  if isAdd andalso a.hasUInt andalso b.hasUInt then
+    dim ou as SmUInt
+    if TryAddSmUIntChecked(a.uintV, b.uintV, ou) = FALSE then return FALSE
+    ExactCartesianComponentAssignFromSmUInt(result, ou)
     return TRUE
   end if
   return FALSE
 end function
 
-private function TryQuotExactInt64(byval num as LongInt, byval den as LongInt, byref quo as LongInt) as Boolean
-  if den = 0 orelse (den = -1 andalso num = FB_I64_MIN) then return FALSE
+private function TryQuotExactSmInt(byval num as SmInt, byval den as SmInt, byref quo as SmInt) as Boolean
+  if den = 0 orelse (den = -1 andalso num = SM_INT_MIN) then return FALSE
   quo = num \ den
   if quo * den = num then return TRUE
   return FALSE
 end function
 
-private function TryQuotExactULong(byval num as ULongInt, byval den as ULongInt, byref quo as ULongInt) as Boolean
-  if den = 0ull then return FALSE
+private function TryQuotExactSmUInt(byval num as SmUInt, byval den as SmUInt, byref quo as SmUInt) as Boolean
+  if den = SmCUInt(0) then return FALSE
   quo = num \ den
-  dim prod as ULongInt
-  if TryMulULongChecked(quo, den, prod) = FALSE then return FALSE
+  dim prod as SmUInt
+  if TryMulSmUIntChecked(quo, den, prod) = FALSE then return FALSE
   return (prod = num)
 end function
 
-private function RelCloseDouble(byval a as Double, byval b as Double) as Boolean
-  const EPS as Double = 1e-12
-  dim scale as Double = abs(b)
+private function RelCloseFloat(byval a as SmFloat, byval b as SmFloat) as Boolean
+  const EPS as SmFloat = SM_TOL_LOST3
+  dim scale as SmFloat = abs(b)
   if scale < 1.0 then scale = 1.0
   return abs(a - b) <= EPS * scale
 end function
 
-private function TryRecoverReducedRationalFromFloatAbs(byval absFVal as Double, byref outNum as LongInt, byref outDen as LongInt) as Boolean
-  const EPS as Double = 1e-12
-  const MAX_B as LongInt = 4096
-  dim bestErr as Double = 1e300
-  dim bestA as LongInt = 0
-  dim bestB as LongInt = 0
-  dim denIter as LongInt
-  for denIter = 1 to MAX_B
-    dim numV as LongInt = CLngInt(round(absFVal * CDbl(denIter)))
-    if numV < 1 then continue for
-    dim denV as LongInt = denIter
-    dim g as LongInt = GcdInt64(numV, denV)
-    numV \= g
-    denV \= g
-    dim approx as Double = CDbl(numV) / CDbl(denV)
-    dim ratErr as Double = abs(absFVal - approx)
+private function TryRecoverReducedRationalFromFloatAbs(byval absFVal as SmFloat, byref outNum as SmInt, byref outDen as SmInt) as Boolean
+  const EPS as SmFloat = SM_TOL_LOST3
+  const MAX_B as SmInt = 4096
+  SM_STATIC_ASSERT(SM_ASSERT_RATIO_MAX_B, MAX_B < SM_INT_MAX \ 8 andalso MAX_B < SM_MAX_EXACT_INT_FROM_FLOAT)
+  if absFVal <= 0 orelse IsNonFiniteValue(absFVal) then return FALSE
+  '' Continued fraction (O(log) steps). Convergents are the best approximations under a denominator bound,
+  '' so this matches the old 1..4096 scan for every recoverable exact float factor.
+  dim scale as SmFloat = absFVal
+  if scale < 1.0 then scale = 1.0
+  dim tol as SmFloat = EPS * scale
+  dim p0 as SmInt = 0
+  dim p1 as SmInt = 1
+  dim q0 as SmInt = 1
+  dim q1 as SmInt = 0
+  dim cfVal as SmFloat = absFVal
+  dim bestA as SmInt = 0
+  dim bestB as SmInt = 0
+  dim bestErr as SmFloat = SM_HUGE_SENTINEL
+  dim term as Integer
+  dim a as SmInt
+  dim p as SmInt
+  dim q as SmInt
+  dim t as SmFloat
+  for term = 0 to 63
+    a = fix(cfVal)
+    t = cfVal - SmCFloat(a)
+    if a < 0 then exit for
+    if p1 > 0 andalso a > (SM_INT_MAX - p0) \ p1 then exit for
+    if q1 > 0 andalso a > (SM_INT_MAX - q0) \ q1 then exit for
+    p = a * p1 + p0
+    q = a * q1 + q0
+    if q <= 0 orelse q > MAX_B then exit for
+    dim approx as SmFloat = SmCFloat(p) / SmCFloat(q)
+    dim ratErr as SmFloat = abs(absFVal - approx)
     if ratErr < bestErr then
       bestErr = ratErr
-      bestA = numV
-      bestB = denV
+      bestA = p
+      bestB = q
+      if ratErr <= tol then exit for
     end if
-  next denIter
-  if bestA < 1 orelse bestB < 1 then return FALSE
-  dim scale as Double = absFVal
-  if scale < 1.0 then scale = 1.0
-  if bestErr > EPS * scale then return FALSE
-  outNum = bestA
-  outDen = bestB
+    if t <= 0 orelse t <= EPS then exit for
+    cfVal = 1.0 / t
+    p0 = p1
+    p1 = p
+    q0 = q1
+    q1 = q
+  next term
+  if bestA < 1 orelse bestB < 1 orelse bestErr > tol then return FALSE
+  dim g as SmInt = GcdSmInt(bestA, bestB)
+  outNum = bestA \ g
+  outDen = bestB \ g
   return TRUE
 end function
 
-private function TryPassExactAbsFloatFactorGates(byval floatV as Double, byval strictAbsFAboveOne as Boolean) as Boolean
+private function TryPassExactAbsFloatFactorGates(byval floatV as SmFloat, byval strictAbsFAboveOne as Boolean) as Boolean
   if IsNonFiniteValue(floatV) orelse floatV = 0 then return FALSE
   if strictAbsFAboveOne then
     if abs(floatV) <= 1.0 then return FALSE
   else
     if abs(floatV) < 1.0 then return FALSE
   end if
-  dim tmpI as LongInt
-  if TryGetExactInt64FromDouble(floatV, tmpI) then return FALSE
+  dim tmpI as SmInt
+  if TryGetExactSmIntFromFloat(floatV, tmpI) then return FALSE
   return TRUE
 end function
 
-private function TryGetExactRoundedIntFromFloatResult(byval r as Double, byval boundAbsResultTo2_53 as Boolean, byref outI as LongInt) as Boolean
-  dim roundedI as LongInt = CLngInt(round(r))
-  if CDbl(roundedI) <> r orelse roundedI = 0 then return FALSE
-  if boundAbsResultTo2_53 andalso abs(CDbl(roundedI)) > FB_MAX_EXACT_INT_FROM_DOUBLE then return FALSE
+private function TryGetExactRoundedIntFromFloatResult(byval r as SmFloat, byval boundAbsResultTo2_53 as Boolean, byref outI as SmInt) as Boolean
+  dim roundedI as SmInt
+  if TryRoundFloatToSmInt(r, roundedI) = FALSE then return FALSE
+  if SmCFloat(roundedI) <> r orelse roundedI = 0 then return FALSE
+  if boundAbsResultTo2_53 andalso abs(SmCFloat(roundedI)) > SM_MAX_EXACT_INT_FROM_FLOAT then return FALSE
   outI = roundedI
   return TRUE
 end function
 
-private function TryVerifyExactIntFloatOpResidue(byval kind as ScalarExactKind, byval intSigned as LongInt, byval intUnsigned as ULongInt, byval floatV as Double, byval resultSigned as LongInt, byval resultUnsigned as ULongInt, byval isMultiply as Boolean) as Boolean
+private function TryVerifyExactIntFloatOpResidue(byval kind as ScalarExactKind, byval intSigned as SmInt, byval intUnsigned as SmUInt, byval floatV as SmFloat, byval resultSigned as SmInt, byval resultUnsigned as SmUInt, byval isMultiply as Boolean) as Boolean
   if kind = SEK_SIGNED then
     if isMultiply then
-      return RelCloseDouble(CDbl(resultSigned) - CDbl(intSigned) * floatV, 0.0)
+      return RelCloseFloat(SmCFloat(resultSigned) - SmCFloat(intSigned) * floatV, 0.0)
     end if
-    return RelCloseDouble(CDbl(intSigned) - CDbl(resultSigned) * floatV, 0.0)
+    return RelCloseFloat(SmCFloat(intSigned) - SmCFloat(resultSigned) * floatV, 0.0)
   end if
   if isMultiply then
-    return RelCloseDouble(CDbl(resultUnsigned) - CDbl(intUnsigned) * floatV, 0.0)
+    return RelCloseFloat(SmCFloat(resultUnsigned) - SmCFloat(intUnsigned) * floatV, 0.0)
   end if
-  return RelCloseDouble(CDbl(intUnsigned) - CDbl(resultUnsigned) * floatV, 0.0)
+  return RelCloseFloat(SmCFloat(intUnsigned) - SmCFloat(resultUnsigned) * floatV, 0.0)
 end function
 
-private function TryVerifyExactIntFloatOpCrossMultiply(byval kind as ScalarExactKind, byval intSigned as LongInt, byval intUnsigned as ULongInt, byval floatV as Double, byval resultSigned as LongInt, byval resultUnsigned as ULongInt, byval ratA as LongInt, byval ratB as LongInt, byval isMultiply as Boolean) as Boolean
+private function TryVerifyExactIntFloatOpCrossMultiply(byval kind as ScalarExactKind, byval intSigned as SmInt, byval intUnsigned as SmUInt, byval floatV as SmFloat, byval resultSigned as SmInt, byval resultUnsigned as SmUInt, byval ratA as SmInt, byval ratB as SmInt, byval isMultiply as Boolean) as Boolean
   if kind = SEK_SIGNED then
-    dim signF as LongInt = 1
+    dim signF as SmInt = 1
     if floatV < 0 then signF = -1
-    dim resultSignedScaled as LongInt
-    dim lhs as LongInt
-    dim rhs as LongInt
-    if TryMulInt64(resultSigned, signF, resultSignedScaled) = FALSE then return FALSE
+    dim resultSignedScaled as SmInt
+    dim lhs as SmInt
+    dim rhs as SmInt
+    if TryMulSmInt(resultSigned, signF, resultSignedScaled) = FALSE then return FALSE
     if isMultiply then
-      if TryMulInt64(resultSignedScaled, ratB, lhs) = FALSE then return FALSE
-      if TryMulInt64(intSigned, ratA, rhs) = FALSE then return FALSE
+      if TryMulSmInt(resultSignedScaled, ratB, lhs) = FALSE then return FALSE
+      if TryMulSmInt(intSigned, ratA, rhs) = FALSE then return FALSE
     else
-      if TryMulInt64(resultSignedScaled, ratA, lhs) = FALSE then return FALSE
-      if TryMulInt64(intSigned, ratB, rhs) = FALSE then return FALSE
+      if TryMulSmInt(resultSignedScaled, ratA, lhs) = FALSE then return FALSE
+      if TryMulSmInt(intSigned, ratB, rhs) = FALSE then return FALSE
     end if
     return (lhs = rhs)
   end if
-  dim lhsU as ULongInt
-  dim rhsU as ULongInt
+  dim lhsU as SmUInt
+  dim rhsU as SmUInt
   if isMultiply then
-    if TryMulULongChecked(resultUnsigned, CULngInt(ratB), lhsU) = FALSE then return FALSE
-    if TryMulULongChecked(intUnsigned, CULngInt(ratA), rhsU) = FALSE then return FALSE
+    if TryMulSmUIntChecked(resultUnsigned, SmCUInt(ratB), lhsU) = FALSE then return FALSE
+    if TryMulSmUIntChecked(intUnsigned, SmCUInt(ratA), rhsU) = FALSE then return FALSE
   else
-    if TryMulULongChecked(resultUnsigned, CULngInt(ratA), lhsU) = FALSE then return FALSE
-    if TryMulULongChecked(intUnsigned, CULngInt(ratB), rhsU) = FALSE then return FALSE
+    if TryMulSmUIntChecked(resultUnsigned, SmCUInt(ratA), lhsU) = FALSE then return FALSE
+    if TryMulSmUIntChecked(intUnsigned, SmCUInt(ratB), rhsU) = FALSE then return FALSE
   end if
   return (lhsU = rhsU)
 end function
 
-private function TryPromoteExactIntFromFloatOp(byval kind as ScalarExactKind, byval intSigned as LongInt, byval intUnsigned as ULongInt, byval floatV as Double, byval r as Double, byval isMultiply as Boolean, byref outV as EvalValue) as Boolean
+private function TryPromoteExactIntFromFloatOp(byval kind as ScalarExactKind, byval intSigned as SmInt, byval intUnsigned as SmUInt, byval floatV as SmFloat, byval r as SmFloat, byval isMultiply as Boolean, byref outV as EvalValue) as Boolean
   if TryPassExactAbsFloatFactorGates(floatV, isMultiply) = FALSE then return FALSE
   if kind = SEK_SIGNED then
-    if abs(CDbl(intSigned)) > FB_MAX_EXACT_INT_FROM_DOUBLE then return FALSE
-  elseif floatV < 0 orelse CDbl(intUnsigned) > FB_MAX_EXACT_INT_FROM_DOUBLE then
+    if abs(SmCFloat(intSigned)) > SM_MAX_EXACT_INT_FROM_FLOAT then return FALSE
+  elseif floatV < 0 orelse SmCFloat(intUnsigned) > SM_MAX_EXACT_INT_FROM_FLOAT then
     return FALSE
   end if
-  dim resultSigned as LongInt
+  dim resultSigned as SmInt
   if TryGetExactRoundedIntFromFloatResult(r, isMultiply, resultSigned) = FALSE then return FALSE
-  dim resultUnsigned as ULongInt = 0
+  dim resultUnsigned as SmUInt = 0
   if kind = SEK_UNSIGNED then
     if resultSigned < 0 then return FALSE
-    resultUnsigned = CULngInt(resultSigned)
-    if isMultiply andalso CDbl(resultUnsigned) > FB_MAX_EXACT_INT_FROM_DOUBLE then return FALSE
+    resultUnsigned = SmCUInt(resultSigned)
+    if isMultiply andalso SmCFloat(resultUnsigned) > SM_MAX_EXACT_INT_FROM_FLOAT then return FALSE
   end if
   if TryVerifyExactIntFloatOpResidue(kind, intSigned, intUnsigned, floatV, resultSigned, resultUnsigned, isMultiply) = FALSE then return FALSE
-  dim ratA as LongInt
-  dim ratB as LongInt
+  dim ratA as SmInt
+  dim ratB as SmInt
   if TryRecoverReducedRationalFromFloatAbs(abs(floatV), ratA, ratB) = FALSE then return FALSE
   if TryVerifyExactIntFloatOpCrossMultiply(kind, intSigned, intUnsigned, floatV, resultSigned, resultUnsigned, ratA, ratB, isMultiply) = FALSE then return FALSE
   if kind = SEK_SIGNED then
-    ValueSetInt64(outV, resultSigned)
+    ValueSetSmInt(outV, resultSigned)
   else
-    ValueSetUInt64(outV, resultUnsigned)
+    ValueSetSmUInt(outV, resultUnsigned)
   end if
   return TRUE
 end function
 
-private function TryPromoteExactDivisionByFloatDivisorSigned(byval intI as LongInt, byval floatV as Double, byval r as Double, byref outV as EvalValue) as Boolean
-  return TryPromoteExactIntFromFloatOp(SEK_SIGNED, intI, 0ull, floatV, r, FALSE, outV)
+private function TryPromoteExactDivisionByFloatDivisorSigned(byval intI as SmInt, byval floatV as SmFloat, byval r as SmFloat, byref outV as EvalValue) as Boolean
+  return TryPromoteExactIntFromFloatOp(SEK_SIGNED, intI, SmCUInt(0), floatV, r, FALSE, outV)
 end function
 
-private function TryPromoteExactDivisionByFloatDivisorUnsigned(byval intU as ULongInt, byval floatV as Double, byval r as Double, byref outV as EvalValue) as Boolean
+private function TryPromoteExactDivisionByFloatDivisorUnsigned(byval intU as SmUInt, byval floatV as SmFloat, byval r as SmFloat, byref outV as EvalValue) as Boolean
   return TryPromoteExactIntFromFloatOp(SEK_UNSIGNED, 0, intU, floatV, r, FALSE, outV)
 end function
 
-private function TryPromoteExactMultiplicationByFloatFactorSigned(byval intI as LongInt, byval floatV as Double, byval r as Double, byref outV as EvalValue) as Boolean
-  return TryPromoteExactIntFromFloatOp(SEK_SIGNED, intI, 0ull, floatV, r, TRUE, outV)
+private function TryPromoteExactMultiplicationByFloatFactorSigned(byval intI as SmInt, byval floatV as SmFloat, byval r as SmFloat, byref outV as EvalValue) as Boolean
+  return TryPromoteExactIntFromFloatOp(SEK_SIGNED, intI, SmCUInt(0), floatV, r, TRUE, outV)
 end function
 
-private function TryPromoteExactMultiplicationByFloatFactorUnsigned(byval intU as ULongInt, byval floatV as Double, byval r as Double, byref outV as EvalValue) as Boolean
+private function TryPromoteExactMultiplicationByFloatFactorUnsigned(byval intU as SmUInt, byval floatV as SmFloat, byval r as SmFloat, byref outV as EvalValue) as Boolean
   return TryPromoteExactIntFromFloatOp(SEK_UNSIGNED, 0, intU, floatV, r, TRUE, outV)
 end function
 
-private function TryApplyExactIntFloatOpFromFloatSide(byval kind as ScalarExactKind, byval isMultiply as Boolean, byval intSigned as LongInt, byval intUnsigned as ULongInt, byval floatV as Double, byval r as Double, byref outV as EvalValue) as Boolean
+private function TryApplyExactIntFloatOpFromFloatSide(byval kind as ScalarExactKind, byval isMultiply as Boolean, byval intSigned as SmInt, byval intUnsigned as SmUInt, byval floatV as SmFloat, byval r as SmFloat, byref outV as EvalValue) as Boolean
   if IsNonFiniteValue(floatV) orelse floatV = 0 then return FALSE
-  const EPS as Double = 1e-12
-  dim tmpI as LongInt
-  dim inv as Double
-  dim invAbs as Double
-  dim invRounded as Double
-  dim nU as ULongInt
-  dim nI as LongInt
-  dim qI as LongInt
-  dim qU as ULongInt
+  const EPS as SmFloat = SM_TOL_LOST3
+  dim tmpI as SmInt
+  dim inv as SmFloat
+  dim invAbs as SmFloat
+  dim invRounded as SmFloat
+  dim nU as SmUInt
+  dim nI as SmInt
+  dim qI as SmInt
+  dim qU as SmUInt
 
   if kind = SEK_UNSIGNED then
     if isMultiply then
       if floatV <= 0 then return FALSE
       if floatV < 1 then
-        if TryGetExactInt64FromDouble(floatV, tmpI) = FALSE then
+        if TryGetExactSmIntFromFloat(floatV, tmpI) = FALSE then
           inv = 1.0 / floatV
           invRounded = round(inv)
-          if invRounded > 1.0 andalso invRounded <= CDbl(FB_U64_MAX) then
+          if invRounded > 1.0 andalso invRounded < SM_FLOAT_SMUINT_BOUND then
             if abs(inv - invRounded) <= EPS * IIf(abs(inv) > 1.0, abs(inv), 1.0) then
-              nU = CULngInt(invRounded)
-              if nU <> 0ull andalso (intUnsigned mod nU) = 0ull then
-                ValueSetUInt64(outV, intUnsigned \ nU)
+              nU = SmCUInt(invRounded)
+              if nU <> SmCUInt(0) andalso (intUnsigned mod nU) = SmCUInt(0) then
+                ValueSetSmUInt(outV, intUnsigned \ nU)
                 return TRUE
               end if
             end if
@@ -6913,22 +7193,22 @@ private function TryApplyExactIntFloatOpFromFloatSide(byval kind as ScalarExactK
       return TryPromoteExactMultiplicationByFloatFactorUnsigned(intUnsigned, floatV, r, outV)
     end if
     if abs(floatV) < 1 then
-      if TryGetExactInt64FromDouble(floatV, tmpI) = FALSE then
+      if TryGetExactSmIntFromFloat(floatV, tmpI) = FALSE then
         inv = 1.0 / floatV
         invRounded = round(inv)
-        if abs(invRounded) > 1.0 andalso abs(invRounded) <= CDbl(FB_U64_MAX) then
+        if abs(invRounded) > 1.0 andalso abs(invRounded) < SM_FLOAT_SMUINT_BOUND then
           if abs(inv - invRounded) <= EPS * IIf(abs(inv) > 1.0, abs(inv), 1.0) then
             if invRounded > 0 then
-              nU = CULngInt(invRounded)
-              if TryMulULongChecked(intUnsigned, nU, qU) then
-                ValueSetUInt64(outV, qU)
+              nU = SmCUInt(invRounded)
+              if TryMulSmUIntChecked(intUnsigned, nU, qU) then
+                ValueSetSmUInt(outV, qU)
                 return TRUE
               end if
             elseif invRounded < 0 then
-              nU = CULngInt(-invRounded)
-              if TryMulULongChecked(intUnsigned, nU, qU) andalso qU <= FB_I64_MAX_U then
-                qI = -CLngInt(qU)
-                ValueSetInt64(outV, qI)
+              nU = SmCUInt(-invRounded)
+              if TryMulSmUIntChecked(intUnsigned, nU, qU) andalso qU <= SM_INT_MAX_U then
+                qI = -SmCInt(qU)
+                ValueSetSmInt(outV, qI)
                 return TRUE
               end if
             end if
@@ -6941,41 +7221,41 @@ private function TryApplyExactIntFloatOpFromFloatSide(byval kind as ScalarExactK
 
   if isMultiply then
     if abs(floatV) < 1.0 then
-      if TryGetExactInt64FromDouble(floatV, tmpI) then return FALSE
+      if TryGetExactSmIntFromFloat(floatV, tmpI) then return FALSE
       inv = 1.0 / floatV
       invAbs = abs(inv)
       invRounded = round(invAbs)
       if invRounded <= 1.0 then return FALSE
       if abs(invAbs - invRounded) > EPS * IIf(invAbs > 1.0, invAbs, 1.0) then return FALSE
-      if invRounded > CDbl(FB_I64_MAX) then return FALSE
-      nI = CLngInt(invRounded)
+      if invRounded >= SM_FLOAT_SMINT_BOUND then return FALSE
+      nI = SmCInt(invRounded)
       if nI <= 1 then return FALSE
       if (intSigned mod nI) <> 0 then return FALSE
       qI = intSigned \ nI
       if floatV < 0 then
-        if qI = FB_I64_MIN then return FALSE
+        if qI = SM_INT_MIN then return FALSE
         qI = -qI
       end if
-      ValueSetInt64(outV, qI)
+      ValueSetSmInt(outV, qI)
       return TRUE
     end if
     return TryPromoteExactMultiplicationByFloatFactorSigned(intSigned, floatV, r, outV)
   end if
 
   if abs(floatV) < 1 then
-    if TryGetExactInt64FromDouble(floatV, tmpI) = FALSE then
+    if TryGetExactSmIntFromFloat(floatV, tmpI) = FALSE then
       inv = 1.0 / floatV
       invRounded = round(inv)
-      if abs(invRounded) > 1.0 andalso abs(invRounded) <= CDbl(FB_I64_MAX) then
+      if abs(invRounded) > 1.0 andalso abs(invRounded) < SM_FLOAT_SMINT_BOUND then
         if abs(inv - invRounded) <= EPS * IIf(abs(inv) > 1.0, abs(inv), 1.0) then
-          nI = CLngInt(invRounded)
-          if TryMulInt64(intSigned, nI, qI) then
-            ValueSetInt64(outV, qI)
+          nI = SmCInt(invRounded)
+          if TryMulSmInt(intSigned, nI, qI) then
+            ValueSetSmInt(outV, qI)
             return TRUE
           elseif intSigned >= 0 andalso nI > 0 then
-            nU = CULngInt(nI)
-            if TryMulULongChecked(CULngInt(intSigned), nU, qU) then
-              ValueSetUInt64(outV, qU)
+            nU = SmCUInt(nI)
+            if TryMulSmUIntChecked(SmCUInt(intSigned), nU, qU) then
+              ValueSetSmUInt(outV, qU)
               return TRUE
             end if
           end if
@@ -6986,59 +7266,61 @@ private function TryApplyExactIntFloatOpFromFloatSide(byval kind as ScalarExactK
   return TryPromoteExactDivisionByFloatDivisorSigned(intSigned, floatV, r, outV)
 end function
 
-private function TryApplyExactIntegerDivisionFromQuotient(byref leftS as ScalarValue, byref rightS as ScalarValue, byval r as Double, byref outV as EvalValue) as Boolean
+private function TryApplyExactIntegerDivisionFromQuotient(byref leftS as ScalarValue, byref rightS as ScalarValue, byval r as SmFloat, byref outV as EvalValue) as Boolean
   if IsNonFiniteValue(r) then return FALSE
-  dim aU as ULongInt, bU as ULongInt
-  if TryGetExactNonNegativeUInt64Scalar(leftS, aU) andalso TryGetExactNonNegativeUInt64Scalar(rightS, bU) then
-    if bU = 0ull then return FALSE
-    dim qU as ULongInt = CULngInt(round(r))
-    dim prodU as ULongInt
-    if TryMulULongChecked(qU, bU, prodU) = FALSE then return FALSE
+  dim aU as SmUInt, bU as SmUInt
+  if TryGetExactNonNegativeSmUIntScalar(leftS, aU) andalso TryGetExactNonNegativeSmUIntScalar(rightS, bU) then
+    if bU = SmCUInt(0) then return FALSE
+    dim qU as SmUInt
+    if TryRoundFloatToSmUInt(r, qU) = FALSE then return FALSE
+    dim prodU as SmUInt
+    if TryMulSmUIntChecked(qU, bU, prodU) = FALSE then return FALSE
     if prodU <> aU then return FALSE
-    ValueSetUInt64(outV, qU)
+    ValueSetSmUInt(outV, qU)
     return TRUE
   end if
-  dim aI as LongInt, bI as LongInt
-  if TryGetExactSignedInt64NoUIntWrapScalar(leftS, aI) andalso TryGetExactSignedInt64NoUIntWrapScalar(rightS, bI) then
+  dim aI as SmInt, bI as SmInt
+  if TryGetExactSignedIntNoSmUIntWrapScalar(leftS, aI) andalso TryGetExactSignedIntNoSmUIntWrapScalar(rightS, bI) then
     if bI = 0 then return FALSE
-    dim qI as LongInt = CLngInt(round(r))
-    dim prodI as LongInt
-    if TryMulInt64(qI, bI, prodI) = FALSE then return FALSE
+    dim qI as SmInt
+    if TryRoundFloatToSmInt(r, qI) = FALSE then return FALSE
+    dim prodI as SmInt
+    if TryMulSmInt(qI, bI, prodI) = FALSE then return FALSE
     if prodI <> aI then return FALSE
-    ValueSetInt64(outV, qI)
+    ValueSetSmInt(outV, qI)
     return TRUE
   end if
 
-  dim intU as ULongInt
-  dim intI as LongInt
+  dim intU as SmUInt
+  dim intI as SmInt
 
-  if TryGetExactNonNegativeUInt64Scalar(leftS, intU) andalso ScalarHasExactIntegerPayload(rightS) = FALSE then
+  if TryGetExactNonNegativeSmUIntScalar(leftS, intU) andalso ScalarHasExactIntegerPayload(rightS) = FALSE then
     if TryApplyExactIntFloatOpFromFloatSide(SEK_UNSIGNED, FALSE, 0, intU, rightS.scalar, r, outV) then return TRUE
   end if
 
-  if TryGetExactSignedInt64NoUIntWrapScalar(leftS, intI) andalso ScalarHasExactIntegerPayload(rightS) = FALSE then
-    if TryApplyExactIntFloatOpFromFloatSide(SEK_SIGNED, FALSE, intI, 0ull, rightS.scalar, r, outV) then return TRUE
+  if TryGetExactSignedIntNoSmUIntWrapScalar(leftS, intI) andalso ScalarHasExactIntegerPayload(rightS) = FALSE then
+    if TryApplyExactIntFloatOpFromFloatSide(SEK_SIGNED, FALSE, intI, SmCUInt(0), rightS.scalar, r, outV) then return TRUE
   end if
 
   return FALSE
 end function
 
-private function TryApplyExactIntegerMultiplicationFromProduct(byref leftS as ScalarValue, byref rightS as ScalarValue, byval r as Double, byref outV as EvalValue) as Boolean
+private function TryApplyExactIntegerMultiplicationFromProduct(byref leftS as ScalarValue, byref rightS as ScalarValue, byval r as SmFloat, byref outV as EvalValue) as Boolean
   if IsNonFiniteValue(r) then return FALSE
 
-  dim intU as ULongInt
-  dim intI as LongInt
+  dim intU as SmUInt
+  dim intI as SmInt
 
-  if TryGetExactNonNegativeUInt64Scalar(leftS, intU) andalso ScalarHasExactIntegerPayload(rightS) = FALSE then
+  if TryGetExactNonNegativeSmUIntScalar(leftS, intU) andalso ScalarHasExactIntegerPayload(rightS) = FALSE then
     if TryApplyExactIntFloatOpFromFloatSide(SEK_UNSIGNED, TRUE, 0, intU, rightS.scalar, r, outV) then return TRUE
-  elseif TryGetExactNonNegativeUInt64Scalar(rightS, intU) andalso ScalarHasExactIntegerPayload(leftS) = FALSE then
+  elseif TryGetExactNonNegativeSmUIntScalar(rightS, intU) andalso ScalarHasExactIntegerPayload(leftS) = FALSE then
     if TryApplyExactIntFloatOpFromFloatSide(SEK_UNSIGNED, TRUE, 0, intU, leftS.scalar, r, outV) then return TRUE
   end if
 
-  if TryGetExactSignedInt64NoUIntWrapScalar(leftS, intI) andalso ScalarHasExactIntegerPayload(rightS) = FALSE then
-    if TryApplyExactIntFloatOpFromFloatSide(SEK_SIGNED, TRUE, intI, 0ull, rightS.scalar, r, outV) then return TRUE
-  elseif TryGetExactSignedInt64NoUIntWrapScalar(rightS, intI) andalso ScalarHasExactIntegerPayload(leftS) = FALSE then
-    if TryApplyExactIntFloatOpFromFloatSide(SEK_SIGNED, TRUE, intI, 0ull, leftS.scalar, r, outV) then return TRUE
+  if TryGetExactSignedIntNoSmUIntWrapScalar(leftS, intI) andalso ScalarHasExactIntegerPayload(rightS) = FALSE then
+    if TryApplyExactIntFloatOpFromFloatSide(SEK_SIGNED, TRUE, intI, SmCUInt(0), rightS.scalar, r, outV) then return TRUE
+  elseif TryGetExactSignedIntNoSmUIntWrapScalar(rightS, intI) andalso ScalarHasExactIntegerPayload(leftS) = FALSE then
+    if TryApplyExactIntFloatOpFromFloatSide(SEK_SIGNED, TRUE, intI, SmCUInt(0), leftS.scalar, r, outV) then return TRUE
   end if
 
   return FALSE
@@ -7075,47 +7357,47 @@ private function TryApplyExactComplexCartesianBinary(byref leftS as ScalarValue,
   end if
 
   if op = CHAR_ASTERISK then
-    dim lar as LongInt, lai as LongInt, lbr as LongInt, lbi as LongInt
-    dim p1 as LongInt, p2 as LongInt, p3 as LongInt, p4 as LongInt
-    dim oreI as LongInt, oimI as LongInt
-    if TryExactCartesianComponentToInt64(lRe, lar) = FALSE then return FALSE
-    if TryExactCartesianComponentToInt64(lIm, lai) = FALSE then return FALSE
-    if TryExactCartesianComponentToInt64(rRe, lbr) = FALSE then return FALSE
-    if TryExactCartesianComponentToInt64(rIm, lbi) = FALSE then return FALSE
-    if TryMulInt64(lar, lbr, p1) = FALSE then return FALSE
-    if TryMulInt64(lai, lbi, p2) = FALSE then return FALSE
-    if TryMulInt64(lar, lbi, p3) = FALSE then return FALSE
-    if TryMulInt64(lai, lbr, p4) = FALSE then return FALSE
-    if TrySubInt64(p1, p2, oreI) = FALSE then return FALSE
-    if TryAddInt64(p3, p4, oimI) = FALSE then return FALSE
-    ExactCartesianComponentAssignFromInt64(oRe, oreI)
-    ExactCartesianComponentAssignFromInt64(oIm, oimI)
+    dim lar as SmInt, lai as SmInt, lbr as SmInt, lbi as SmInt
+    dim p1 as SmInt, p2 as SmInt, p3 as SmInt, p4 as SmInt
+    dim oreI as SmInt, oimI as SmInt
+    if TryExactCartesianComponentToSmInt(lRe, lar) = FALSE then return FALSE
+    if TryExactCartesianComponentToSmInt(lIm, lai) = FALSE then return FALSE
+    if TryExactCartesianComponentToSmInt(rRe, lbr) = FALSE then return FALSE
+    if TryExactCartesianComponentToSmInt(rIm, lbi) = FALSE then return FALSE
+    if TryMulSmInt(lar, lbr, p1) = FALSE then return FALSE
+    if TryMulSmInt(lai, lbi, p2) = FALSE then return FALSE
+    if TryMulSmInt(lar, lbi, p3) = FALSE then return FALSE
+    if TryMulSmInt(lai, lbr, p4) = FALSE then return FALSE
+    if TrySubSmInt(p1, p2, oreI) = FALSE then return FALSE
+    if TryAddSmInt(p3, p4, oimI) = FALSE then return FALSE
+    ExactCartesianComponentAssignFromSmInt(oRe, oreI)
+    ExactCartesianComponentAssignFromSmInt(oIm, oimI)
     ValueSetScalarComplexFromExactCartesian(outV, oRe, oIm)
     return TRUE
   end if
 
   if op = CHAR_DIVIDE then
-    dim lar as LongInt, lai as LongInt, lbr as LongInt, lbi as LongInt
-    dim p1 as LongInt, p2 as LongInt, p3 as LongInt, p4 as LongInt, p5 as LongInt, p6 as LongInt
-    dim numRe as LongInt, numIm as LongInt, denom as LongInt, qRe as LongInt, qIm as LongInt
-    if TryExactCartesianComponentToInt64(lRe, lar) = FALSE then return FALSE
-    if TryExactCartesianComponentToInt64(lIm, lai) = FALSE then return FALSE
-    if TryExactCartesianComponentToInt64(rRe, lbr) = FALSE then return FALSE
-    if TryExactCartesianComponentToInt64(rIm, lbi) = FALSE then return FALSE
-    if TryMulInt64(lar, lbr, p1) = FALSE then return FALSE
-    if TryMulInt64(lai, lbi, p2) = FALSE then return FALSE
-    if TryAddInt64(p1, p2, numRe) = FALSE then return FALSE
-    if TryMulInt64(lbr, lbr, p3) = FALSE then return FALSE
-    if TryMulInt64(lbi, lbi, p4) = FALSE then return FALSE
-    if TryAddInt64(p3, p4, denom) = FALSE then return FALSE
+    dim lar as SmInt, lai as SmInt, lbr as SmInt, lbi as SmInt
+    dim p1 as SmInt, p2 as SmInt, p3 as SmInt, p4 as SmInt, p5 as SmInt, p6 as SmInt
+    dim numRe as SmInt, numIm as SmInt, denom as SmInt, qRe as SmInt, qIm as SmInt
+    if TryExactCartesianComponentToSmInt(lRe, lar) = FALSE then return FALSE
+    if TryExactCartesianComponentToSmInt(lIm, lai) = FALSE then return FALSE
+    if TryExactCartesianComponentToSmInt(rRe, lbr) = FALSE then return FALSE
+    if TryExactCartesianComponentToSmInt(rIm, lbi) = FALSE then return FALSE
+    if TryMulSmInt(lar, lbr, p1) = FALSE then return FALSE
+    if TryMulSmInt(lai, lbi, p2) = FALSE then return FALSE
+    if TryAddSmInt(p1, p2, numRe) = FALSE then return FALSE
+    if TryMulSmInt(lbr, lbr, p3) = FALSE then return FALSE
+    if TryMulSmInt(lbi, lbi, p4) = FALSE then return FALSE
+    if TryAddSmInt(p3, p4, denom) = FALSE then return FALSE
     if denom = 0 then return FALSE
-    if TryMulInt64(lai, lbr, p5) = FALSE then return FALSE
-    if TryMulInt64(lar, lbi, p6) = FALSE then return FALSE
-    if TrySubInt64(p5, p6, numIm) = FALSE then return FALSE
-    if TryQuotExactInt64(numRe, denom, qRe) = FALSE then return FALSE
-    if TryQuotExactInt64(numIm, denom, qIm) = FALSE then return FALSE
-    ExactCartesianComponentAssignFromInt64(oRe, qRe)
-    ExactCartesianComponentAssignFromInt64(oIm, qIm)
+    if TryMulSmInt(lai, lbr, p5) = FALSE then return FALSE
+    if TryMulSmInt(lar, lbi, p6) = FALSE then return FALSE
+    if TrySubSmInt(p5, p6, numIm) = FALSE then return FALSE
+    if TryQuotExactSmInt(numRe, denom, qRe) = FALSE then return FALSE
+    if TryQuotExactSmInt(numIm, denom, qIm) = FALSE then return FALSE
+    ExactCartesianComponentAssignFromSmInt(oRe, qRe)
+    ExactCartesianComponentAssignFromSmInt(oIm, qIm)
     ValueSetScalarComplexFromExactCartesian(outV, oRe, oIm)
     return TRUE
   end if
@@ -7129,54 +7411,54 @@ private sub ValueSetScalarComplexFromEvalRealImagParts(byref outV as EvalValue, 
   if TryExtractExactRealComponent(rePart.scalarValue, reC) andalso TryExtractExactRealComponent(imPart.scalarValue, imC) then
     ValueSetScalarComplexFromExactCartesian(outV, reC, imC)
   else
-    ValueSetScalarComplexFromDoubles(outV, rePart.scalar, imPart.scalar)
+    ValueSetScalarComplexFromFloats(outV, rePart.scalar, imPart.scalar)
   end if
 end sub
 
 '' Negative real sqrt (complex mode): |x| via same sqrt policy as sqrt(|x|), then pure imaginary.
 private sub ValueSetPureImaginaryFromMagnitudeScalar(byref outV as EvalValue, byref magSv as ScalarValue)
-  ValueSetInt64(outV, 0)
+  ValueSetSmInt(outV, 0)
   if ScalarHasExactIntegerPayload(magSv) then
-    if ScalarExactInt64Valid(magSv) then
-      ScalarSetImagExactInt64Valid(outV.scalarValue, TRUE)
-      outV.scalarValue.imagExactInt64 = magSv.exactInt64
-      if magSv.exactInt64 >= 0 then
-        ScalarSetImagExactUInt64Valid(outV.scalarValue, TRUE)
-        outV.scalarValue.imagExactUInt64 = CULngInt(magSv.exactInt64)
+    if ScalarExactSmIntValid(magSv) then
+      ScalarSetImagExactSmIntValid(outV.scalarValue, TRUE)
+      outV.scalarValue.imagExactInt = magSv.exactInt
+      if magSv.exactInt >= 0 then
+        ScalarSetImagExactSmUIntValid(outV.scalarValue, TRUE)
+        outV.scalarValue.imagExactUInt = SmCUInt(magSv.exactInt)
       else
-        ScalarSetImagExactUInt64Valid(outV.scalarValue, FALSE)
-        outV.scalarValue.imagExactUInt64 = 0
+        ScalarSetImagExactSmUIntValid(outV.scalarValue, FALSE)
+        outV.scalarValue.imagExactUInt = 0
       end if
-      outV.scalarValue.imag = CDbl(magSv.exactInt64)
-    elseif ScalarExactUInt64Valid(magSv) then
-      ScalarSetImagExactUInt64Valid(outV.scalarValue, TRUE)
-      outV.scalarValue.imagExactUInt64 = magSv.exactUInt64
-      outV.scalarValue.imag = CDbl(magSv.exactUInt64)
-      if magSv.exactUInt64 <= FB_I64_MAX_U then
-        ScalarSetImagExactInt64Valid(outV.scalarValue, TRUE)
-        outV.scalarValue.imagExactInt64 = CLngInt(magSv.exactUInt64)
+      outV.scalarValue.imag = SmCFloat(magSv.exactInt)
+    elseif ScalarExactSmUIntValid(magSv) then
+      ScalarSetImagExactSmUIntValid(outV.scalarValue, TRUE)
+      outV.scalarValue.imagExactUInt = magSv.exactUInt
+      outV.scalarValue.imag = SmCFloat(magSv.exactUInt)
+      if magSv.exactUInt <= SM_INT_MAX_U then
+        ScalarSetImagExactSmIntValid(outV.scalarValue, TRUE)
+        outV.scalarValue.imagExactInt = SmCInt(magSv.exactUInt)
       else
-        ScalarSetImagExactInt64Valid(outV.scalarValue, FALSE)
-        outV.scalarValue.imagExactInt64 = 0
+        ScalarSetImagExactSmIntValid(outV.scalarValue, FALSE)
+        outV.scalarValue.imagExactInt = 0
       end if
     else
       outV.scalarValue.imag = magSv.scalar
-      ScalarSetImagExactInt64Valid(outV.scalarValue, FALSE)
-      ScalarSetImagExactUInt64Valid(outV.scalarValue, FALSE)
+      ScalarSetImagExactSmIntValid(outV.scalarValue, FALSE)
+      ScalarSetImagExactSmUIntValid(outV.scalarValue, FALSE)
     end if
   else
     outV.scalarValue.imag = magSv.scalar
-    ScalarSetImagExactInt64Valid(outV.scalarValue, FALSE)
-    ScalarSetImagExactUInt64Valid(outV.scalarValue, FALSE)
-    outV.scalarValue.imagExactInt64 = 0
-    outV.scalarValue.imagExactUInt64 = 0
+    ScalarSetImagExactSmIntValid(outV.scalarValue, FALSE)
+    ScalarSetImagExactSmUIntValid(outV.scalarValue, FALSE)
+    outV.scalarValue.imagExactInt = 0
+    outV.scalarValue.imagExactUInt = 0
   end if
   ScalarRepairExactMetadata(outV.scalarValue)
 end sub
 
-private sub SetEvalPureImaginaryFromRootMagnitude(byval rootCand as LongInt, byref outV as EvalValue)
+private sub SetEvalPureImaginaryFromRootMagnitude(byval rootCand as SmInt, byref outV as EvalValue)
   dim magV as EvalValue
-  ValueSetInt64(magV, rootCand)
+  ValueSetSmInt(magV, rootCand)
   ValueSetPureImaginaryFromMagnitudeScalar(outV, magV.scalarValue)
 end sub
 
@@ -7189,31 +7471,32 @@ private sub ApplySqrtNegativeRealAsPureImagComplex(byref scalarV as ScalarValue,
 end sub
 
 '' Principal complex sqrt; promote to exact int complex when square verifies against exact input.
-private function TryRefineSqrtPrincipalToExactComplex(byref inSv as ScalarValue, byval sqrtR as Double, byval sqrtI as Double, byref outV as EvalValue) as Boolean
+private function TryRefineSqrtPrincipalToExactComplex(byref inSv as ScalarValue, byval sqrtR as SmFloat, byval sqrtI as SmFloat, byref outV as EvalValue) as Boolean
   if IsNonFiniteValue(sqrtR) orelse IsNonFiniteValue(sqrtI) then return FALSE
   dim reC as ExactCartesianComponent
   dim imC as ExactCartesianComponent
   if TryExtractExactRealComponent(inSv, reC) = FALSE then return FALSE
   if TryExtractExactImagComponent(inSv, imC) = FALSE then return FALSE
-  dim arI as LongInt
-  dim aiI as LongInt
-  if TryExactCartesianComponentToInt64(reC, arI) = FALSE then return FALSE
-  if TryExactCartesianComponentToInt64(imC, aiI) = FALSE then return FALSE
-  dim rootRi as LongInt = CLngInt(round(sqrtR))
-  dim rootIi as LongInt = CLngInt(round(sqrtI))
+  dim arI as SmInt
+  dim aiI as SmInt
+  if TryExactCartesianComponentToSmInt(reC, arI) = FALSE then return FALSE
+  if TryExactCartesianComponentToSmInt(imC, aiI) = FALSE then return FALSE
+  dim rootRi as SmInt
+  dim rootIi as SmInt
+  if TryRoundFloatToSmInt(sqrtR, rootRi) = FALSE orelse TryRoundFloatToSmInt(sqrtI, rootIi) = FALSE then return FALSE
   if TryVerifyComplexCartesianSquareExact(rootRi, rootIi, arI, aiI) = FALSE then return FALSE
   dim rePart as EvalValue
   dim imPart as EvalValue
-  ValueSetInt64(rePart, rootRi)
-  ValueSetInt64(imPart, rootIi)
+  ValueSetSmInt(rePart, rootRi)
+  ValueSetSmInt(imPart, rootIi)
   ValueSetScalarComplexFromEvalRealImagParts(outV, rePart, imPart)
   return TRUE
 end function
 
 private sub ApplyUnarySqrtEval(byref scalarV as ScalarValue, byref outV as EvalValue)
   if Parser_SupportComplexNumbers then
-    dim arU as Double
-    dim aiU as Double
+    dim arU as SmFloat
+    dim aiU as SmFloat
     ScalarLoadCartesian(scalarV, arU, aiU)
     if ScalarHasNonzeroImaginaryPart(scalarV) then
       ApplySqrtComplexPrincipalUnary(scalarV, outV)
@@ -7228,49 +7511,50 @@ private sub ApplyUnarySqrtEval(byref scalarV as ScalarValue, byref outV as EvalV
 end sub
 
 private sub ApplySqrtComplexPrincipalUnary(byref inSv as ScalarValue, byref outV as EvalValue)
-  dim cr as Double
-  dim ci as Double
+  dim cr as SmFloat
+  dim ci as SmFloat
   ScalarLoadCartesian(inSv, cr, ci)
   if IsNaNValue(cr) orelse IsNaNValue(ci) then
-    ValueSetScalarComplexFromDoubles(outV, MakeNaN(), MakeNaN())
+    ValueSetScalarComplexFromFloats(outV, MakeNaN(), MakeNaN())
     exit sub
   end if
-  dim mag as Double = CalcHypot(cr, ci)
+  dim mag as SmFloat = CalcHypot(cr, ci)
   if mag = 0.0 then
-    ValueSetScalarComplexFromDoubles(outV, 0.0, 0.0)
+    ValueSetScalarComplexFromFloats(outV, 0.0, 0.0)
     exit sub
   end if
-  dim sqrtR as Double
-  dim sqrtI as Double
+  dim sqrtR as SmFloat
+  dim sqrtI as SmFloat
   ScalarComplexPrincipalSqrt(cr, ci, sqrtR, sqrtI)
   if TryRefineSqrtPrincipalToExactComplex(inSv, sqrtR, sqrtI, outV) then exit sub
-  ValueSetScalarComplexFromDoubles(outV, sqrtR, sqrtI)
+  ValueSetScalarComplexFromFloats(outV, sqrtR, sqrtI)
 end sub
 
 '' After principal complex **, promote to exact scalar/complex when real ** verification applies (pure real operands).
-private function TryRefinePowPrincipalToExactScalarResult(byref leftS as ScalarValue, byref rightS as ScalarValue, byval powR as Double, byval powI as Double, byref outV as EvalValue) as Boolean
-  const eps as Double = 1e-12
-  dim ar as Double, ai as Double, br as Double, bi as Double
+private function TryRefinePowPrincipalToExactScalarResult(byref leftS as ScalarValue, byref rightS as ScalarValue, byval powR as SmFloat, byval powI as SmFloat, byref outV as EvalValue) as Boolean
+  const eps as SmFloat = SM_TOL_LOST3
+  dim ar as SmFloat, ai as SmFloat, br as SmFloat, bi as SmFloat
   ScalarLoadCartesian(leftS, ar, ai)
   ScalarLoadCartesian(rightS, br, bi)
   if abs(ai) > eps orelse abs(bi) > eps then return FALSE
 
-  dim p as Double = br
+  dim p as SmFloat = br
   if IsNonFiniteValue(p) orelse IsNonFiniteValue(powR) orelse IsNonFiniteValue(powI) then return FALSE
 
-  dim valueInt as LongInt
-  dim hasSigned as Boolean = TryGetExactSignedInt64NoUIntWrapScalarStrict(leftS, valueInt)
-  dim inpU as ULongInt
-  dim hasUInt as Boolean = TryGetExactNonNegativeUInt64Scalar(leftS, inpU)
+  dim valueInt as SmInt
+  dim hasSigned as Boolean = TryGetExactSignedIntNoSmUIntWrapScalarStrict(leftS, valueInt)
+  dim inpU as SmUInt
+  dim hasUInt as Boolean = TryGetExactNonNegativeSmUIntScalar(leftS, inpU)
 
   if p > 0.0 andalso p < 1.0 then
-    dim nRoot as LongInt
+    dim nRoot as SmInt
     if FractionalPowerResolveRootDegree(p, nRoot) = FALSE then return FALSE
     if hasSigned andalso valueInt < 0 then
       if abs(powR) > eps then return FALSE
-      dim rootCand as LongInt = CLngInt(round(powI))
-      dim verifyBase as LongInt = valueInt
-      if nRoot = 2 andalso valueInt <> FB_I64_MIN then verifyBase = -valueInt
+      dim rootCand as SmInt
+      if TryRoundFloatToSmInt(powI, rootCand) = FALSE then return FALSE
+      dim verifyBase as SmInt = valueInt
+      if nRoot = 2 andalso valueInt <> SM_INT_MIN then verifyBase = -valueInt
       if TryPowVerifyRootExact(verifyBase, rootCand, nRoot) = FALSE then
         if nRoot <> 2 orelse TryPowVerifyRootExact(valueInt, rootCand, nRoot) = FALSE then return FALSE
       end if
@@ -7278,37 +7562,40 @@ private function TryRefinePowPrincipalToExactScalarResult(byref leftS as ScalarV
       return TRUE
     elseif hasSigned andalso valueInt >= 0 then
       if abs(powI) > eps then return FALSE
-      dim rootCand as LongInt = CLngInt(round(powR))
+      dim rootCand as SmInt
+      if TryRoundFloatToSmInt(powR, rootCand) = FALSE then return FALSE
       if TryPowVerifyRootExact(valueInt, rootCand, nRoot) = FALSE then return FALSE
-      ValueSetInt64(outV, rootCand)
+      ValueSetSmInt(outV, rootCand)
       return TRUE
     elseif hasUInt then
       if abs(powI) > eps then return FALSE
-      dim rootCand as ULongInt = CULngInt(round(powR))
-      dim sq as ULongInt
-      if TryPowULong(rootCand, CULngInt(nRoot), sq) = FALSE orelse sq <> inpU then return FALSE
-      ValueSetUInt64PreferInt64(outV, rootCand)
+      dim rootCand as SmUInt
+      if TryRoundFloatToSmUInt(powR, rootCand) = FALSE then return FALSE
+      dim sq as SmUInt
+      if TryPowSmUInt(rootCand, SmCUInt(nRoot), sq) = FALSE orelse sq <> inpU then return FALSE
+      ValueSetSmUIntPreferSmInt(outV, rootCand)
       return TRUE
     end if
     return FALSE
   end if
 
   if p >= 1.0 then
-    dim nExp as LongInt
+    dim nExp as SmInt
     if TryGetSmallIntegerExponent(p, nExp) = FALSE then return FALSE
     if abs(powI) > eps then return FALSE
-    dim powResult as LongInt = CLngInt(round(powR))
+    dim powResult as SmInt
+    if TryRoundFloatToSmInt(powR, powResult) = FALSE then return FALSE
     if hasSigned then
       if TryPowVerifyIntExponentExact(valueInt, powResult, nExp) = FALSE then return FALSE
-      ValueSetInt64(outV, powResult)
+      ValueSetSmInt(outV, powResult)
       return TRUE
     elseif hasUInt then
-      dim recon as ULongInt
-      if TryPowULong(inpU, CULngInt(nExp), recon) = FALSE orelse recon <> CULngInt(powResult) then return FALSE
-      if CULngInt(powResult) <= FB_I64_MAX_U then
-        ValueSetInt64(outV, powResult)
+      dim recon as SmUInt
+      if TryPowSmUInt(inpU, SmCUInt(nExp), recon) = FALSE orelse recon <> SmCUInt(powResult) then return FALSE
+      if SmCUInt(powResult) <= SM_INT_MAX_U then
+        ValueSetSmInt(outV, powResult)
       else
-        ValueSetUInt64(outV, CULngInt(powResult))
+        ValueSetSmUInt(outV, SmCUInt(powResult))
       end if
       return TRUE
     end if
@@ -7317,14 +7604,14 @@ private function TryRefinePowPrincipalToExactScalarResult(byref leftS as ScalarV
 end function
 
 private function TryNegateExactCartesianComponent(byref c as ExactCartesianComponent, byref outC as ExactCartesianComponent) as Boolean
-  dim i as LongInt
-  if TryExactCartesianComponentToInt64(c, i) then
-    if i = FB_I64_MIN then return FALSE
-    ExactCartesianComponentAssignFromSignedInt64(outC, -i)
+  dim i as SmInt
+  if TryExactCartesianComponentToSmInt(c, i) then
+    if i = SM_INT_MIN then return FALSE
+    ExactCartesianComponentAssignFromSignedInt(outC, -i)
     return TRUE
   end if
-  if c.hasUInt <> 0 then return FALSE
-  ExactCartesianComponentAssignFromSignedInt64(outC, 0)
+  if c.hasUInt then return FALSE
+  ExactCartesianComponentAssignFromSignedInt(outC, 0)
   return TRUE
 end function
 
@@ -7342,59 +7629,62 @@ private function TryNegateExactComplexScalar(byref sv as ScalarValue, byref outV
   return TRUE
 end function
 
-'' Unary minus on exact int64/uint64/complex scalars (avoids float multiply for large magnitudes).
+'' Unary minus on exact SmInt/SmUInt/complex scalars (avoids float multiply for large magnitudes).
 private function TryNegateEvalScalarUnary(byref v as EvalValue, byref outV as EvalValue) as Boolean
   if v.kind <> VK_SCALAR then return FALSE
   if TryNegateExactComplexScalar(v.scalarValue, outV) then return TRUE
   if Parser_SupportComplexNumbers andalso ScalarHasNonzeroImaginaryPart(v.scalarValue) then
-    ' Complex scalar: don't fall through to plain int64/uint64 negation
+    ' Complex scalar: don't fall through to plain SmInt/SmUInt negation
     ' that would discard NaN/Inf imaginary components.
     return FALSE
   end if
-  if ScalarExactInt64Valid(v.scalarValue) orelse v.scalarValue.scalarStorageKind = SSK_INT64 then
-    if v.scalarValue.exactInt64 = FB_I64_MIN then return FALSE
-    ValueSetInt64(outV, -v.scalarValue.exactInt64)
+  if ScalarExactSmIntValid(v.scalarValue) orelse v.scalarValue.scalarStorageKind = SSK_SMINT then
+    if v.scalarValue.exactInt = SM_INT_MIN then
+      ValueSetSmUInt(outV, SM_INT_MIN_MAG)
+      return TRUE
+    end if
+    ValueSetSmInt(outV, -v.scalarValue.exactInt)
     return TRUE
   end if
-  if ScalarExactUInt64Valid(v.scalarValue) orelse v.scalarValue.scalarStorageKind = SSK_UINT64 then
-    dim u as ULongInt = v.scalarValue.exactUInt64
-    if u = 0ull then
-      ValueSetInt64(outV, 0)
+  if ScalarExactSmUIntValid(v.scalarValue) orelse v.scalarValue.scalarStorageKind = SSK_SMUINT then
+    dim u as SmUInt = v.scalarValue.exactUInt
+    if u = SmCUInt(0) then
+      ValueSetSmInt(outV, 0)
       return TRUE
     end if
-    if u = FB_I64_MIN_MAG_U then
-      ValueSetInt64(outV, FB_I64_MIN)
+    if u = SM_INT_MIN_MAG then
+      ValueSetSmInt(outV, SM_INT_MIN)
       return TRUE
     end if
-    if u <= FB_I64_MAX_U then
-      ValueSetInt64(outV, -CLngInt(u))
+    if u <= SM_INT_MAX_U then
+      ValueSetSmInt(outV, -SmCInt(u))
       return TRUE
     end if
-    ValueSetScalar(outV, -CDbl(u))
+    ValueSetScalar(outV, -SmCFloat(u))
     return TRUE
   end if
   return FALSE
 end function
 
-private sub ScalarSplitCartesianParts(byref scalarV as ScalarValue, byval ar as Double, byval ai as Double, byref svRe as ScalarValue, byref svIm as ScalarValue)
+private sub ScalarSplitCartesianParts(byref scalarV as ScalarValue, byval ar as SmFloat, byval ai as SmFloat, byref svRe as ScalarValue, byref svIm as ScalarValue)
   svRe = scalarV
   svRe.scalar = ar
   ScalarClearImag(svRe)
   dim imOnly as ScalarValue
   imOnly.scalar = ai
   ScalarClearImag(imOnly)
-  if ScalarImagExactInt64Valid(scalarV) then
-    imOnly.exactInt64Valid = TRUE
-    imOnly.exactInt64 = scalarV.imagExactInt64
-    if ScalarImagExactUInt64Valid(scalarV) then
-      imOnly.exactUInt64Valid = TRUE
-      imOnly.exactUInt64 = scalarV.imagExactUInt64
+  if ScalarImagExactSmIntValid(scalarV) then
+    imOnly.exactIntValid = TRUE
+    imOnly.exactInt = scalarV.imagExactInt
+    if ScalarImagExactSmUIntValid(scalarV) then
+      imOnly.exactUIntValid = TRUE
+      imOnly.exactUInt = scalarV.imagExactUInt
     end if
   end if
   svIm = imOnly
 end sub
 
-private sub CalcRoundingFnCartesian(byval fnId as Integer, byref scalarV as ScalarValue, byval ar as Double, byval ai as Double, byref outV as EvalValue)
+private sub CalcRoundingFnCartesian(byval fnId as Integer, byref scalarV as ScalarValue, byval ar as SmFloat, byval ai as SmFloat, byref outV as EvalValue)
   dim svRe as ScalarValue
   dim svImOnly as ScalarValue
   ScalarSplitCartesianParts(scalarV, ar, ai, svRe, svImOnly)
@@ -7405,23 +7695,43 @@ private sub CalcRoundingFnCartesian(byval fnId as Integer, byref scalarV as Scal
   ValueSetScalarComplexFromEvalRealImagParts(outV, outRe, outIm)
 end sub
 
-private function TryApplyFactorialScalarInt(byval n as LongInt, byref outV as EvalValue) as Boolean
+'' n! as SmFloat for n > FactorialMaxArg(): table built once by the same recurrence as the old run-time loop
+'' (exact SmInt factorials, then one multiplication per step); +inf above the largest finite factorial.
+private function FactorialFloatFromInt(byval n as SmInt) as SmFloat
+  static factFloatTab() as SmFloat
+  static top as Integer = -1
+  if top < 0 then
+    dim maxArg as Integer = FactorialMaxArg()
+    dim cap as Integer = 1024
+    redim factFloatTab(0 to cap)
+    dim i as Integer
+    for i = 0 to maxArg
+      factFloatTab(i) = SmCFloat(FactorialInt(i))
+    next i
+    top = maxArg
+    do
+      dim nextV as SmFloat = factFloatTab(top) * SmCFloat(top + 1)
+      if IsNonFiniteValue(nextV) then exit do
+      top += 1
+      if top > cap then
+        cap *= 2
+        redim preserve factFloatTab(0 to cap)
+      end if
+      factFloatTab(top) = nextV
+    loop
+  end if
+  if n <= top then return factFloatTab(CInt(n))
+  return 1.0 / 0.0
+end function
+
+private function TryApplyFactorialScalarInt(byval n as SmInt, byref outV as EvalValue) as Boolean
   if n < 0 then return FALSE
-  static factTable(0 to 20) as LongInt = { _
-    1ll, 1ll, 2ll, 6ll, 24ll, 120ll, 720ll, 5040ll, 40320ll, 362880ll, _
-    3628800ll, 39916800ll, 479001600ll, 6227020800ll, 87178291200ll, 1307674368000ll, _
-    20922789888000ll, 355687428096000ll, 6402373705728000ll, 121645100408832000ll, 2432902008176640000ll }
-  if n <= 20 then
-    ValueSetInt64(outV, factTable(n))
+  dim maxArg as Integer = FactorialMaxArg()
+  if n <= maxArg then
+    ValueSetSmInt(outV, FactorialInt(CInt(n)))
     return TRUE
   end if
-  dim d as Double = CDbl(factTable(20))
-  dim fi as LongInt
-  for fi = 21 to n
-    d *= CDbl(fi)
-    if IsNonFiniteValue(d) then exit for
-  next fi
-  ValueSetScalar(outV, d)
+  ValueSetScalar(outV, FactorialFloatFromInt(n))
   return TRUE
 end function
 
@@ -7437,8 +7747,8 @@ private function ApplyUnaryComplexSupportScalars(byval fnId as Integer, byref sc
     if isCxComponentUnary = FALSE then return FALSE
   end if
 
-  dim ar as Double
-  dim ai as Double
+  dim ar as SmFloat
+  dim ai as SmFloat
   ScalarLoadCartesian(scalarV, ar, ai)
   if Parser_SupportComplexNumbers = FALSE andalso ScalarHasNonzeroImaginaryPart(scalarV) then return FALSE
 
@@ -7473,7 +7783,7 @@ private function ApplyUnaryComplexSupportScalars(byval fnId as Integer, byref sc
         if TryExtractExactRealComponent(scalarV, cReCart) andalso TryExtractExactImagComponent(scalarV, cImCart) then
           ValueSetScalarComplexFromExactCartesian(outV, cReCart, cImCart)
         else
-          ValueSetScalarComplexFromDoubles(outV, ar, ai)
+          ValueSetScalarComplexFromFloats(outV, ar, ai)
         end if
       else
         ValueSetScalar(outV, ar)
@@ -7486,7 +7796,7 @@ private function ApplyUnaryComplexSupportScalars(byval fnId as Integer, byref sc
         dim cImConj as ExactCartesianComponent
         if TryExtractExactRealComponent(scalarV, cRe) andalso TryExtractExactImagComponent(scalarV, cIm) then
           if ScalarHasNonzeroImaginaryPart(scalarV) andalso TryNegateExactCartesianComponent(cIm, cImConj) = FALSE then
-            ValueSetScalarComplexFromDoubles(outV, ar, -ai)
+            ValueSetScalarComplexFromFloats(outV, ar, -ai)
           else
             if ScalarHasNonzeroImaginaryPart(scalarV) then
               ValueSetScalarComplexFromExactCartesian(outV, cRe, cImConj)
@@ -7495,7 +7805,7 @@ private function ApplyUnaryComplexSupportScalars(byval fnId as Integer, byref sc
             end if
           end if
         else
-          ValueSetScalarComplexFromDoubles(outV, ar, -ai)
+          ValueSetScalarComplexFromFloats(outV, ar, -ai)
         end if
       else
         ValueSetScalar(outV, ar)
@@ -7530,40 +7840,42 @@ private function ApplyUnaryComplexSupportScalars(byval fnId as Integer, byref sc
       end if
     case FUNC_SIGN
       if Parser_SupportComplexNumbers = FALSE then return FALSE
-      dim mag as Double = CalcHypot(ar, ai)
+      ' A real operand keeps the real sign (exact int; sign(nan) is nan, sign(+-inf) is +-1).
+      if ScalarHasNonzeroImaginaryPart(scalarV) = FALSE then return FALSE
+      dim mag as SmFloat = CalcHypot(ar, ai)
       dim isMagZero as Boolean = (mag = 0.0)
       if isMagZero orElse IsNaNValue(mag) orElse IsNaNValue(ar) orElse IsNaNValue(ai) then
-        ValueSetScalarComplexFromDoubles(outV, 0.0, 0.0)
+        ValueSetScalarComplexFromFloats(outV, 0.0, 0.0)
       else
-        ValueSetScalarComplexFromDoubles(outV, ar / mag, ai / mag)
+        ValueSetScalarComplexFromFloats(outV, ar / mag, ai / mag)
       end if
     case FUNC_FACT
       if Parser_SupportComplexNumbers = FALSE andalso ScalarHasNonzeroImaginaryPart(scalarV) then return FALSE
       if ai = 0.0 andalso ScalarHasNonzeroImaginaryPart(scalarV) = FALSE then
-        dim nFact as LongInt
-        if TryGetExactInt64Scalar(scalarV, nFact) then
+        dim nFact as SmInt
+        if TryGetExactSmIntScalar(scalarV, nFact) then
           if nFact < 0 then return FALSE
           if TryApplyFactorialScalarInt(nFact, outV) then return TRUE
         end if
       end if
       if Parser_SupportComplexNumbers = FALSE then return FALSE
-      dim gr as Double
-      dim gi as Double
+      dim gr as SmFloat
+      dim gi as SmFloat
       if ScalarComplexGamma(ar + 1.0, ai, gr, gi) = FALSE then return FALSE
-      ValueSetScalarComplexFromDoubles(outV, gr, gi)
+      ValueSetScalarComplexFromFloats(outV, gr, gi)
     case else
       return FALSE
   end select
   return TRUE
 end function
 
-private sub ScalarComplexPowPrincipal(byval ar as Double, byval ai as Double, byval br as Double, byval bi as Double, byref outR as Double, byref outI as Double)
+private sub ScalarComplexPowPrincipal(byval ar as SmFloat, byval ai as SmFloat, byval br as SmFloat, byval bi as SmFloat, byref outR as SmFloat, byref outI as SmFloat)
   if IsNaNValue(ar) orelse IsNaNValue(ai) orelse IsNaNValue(br) orelse IsNaNValue(bi) then
     outR = MakeNaN()
     outI = MakeNaN()
     exit sub
   end if
-  dim mag as Double = CalcHypot(ar, ai)
+  dim mag as SmFloat = CalcHypot(ar, ai)
   if mag = 0.0 then
     if br = 0.0 andalso bi = 0.0 then
       outR = 1.0
@@ -7580,22 +7892,23 @@ private sub ScalarComplexPowPrincipal(byval ar as Double, byval ai as Double, by
     end if
     exit sub
   end if
-  const epsPow as Double = 1e-14
+  const epsPow as SmFloat = SM_TOL_LOST1
   if abs(bi) < epsPow then
-    dim nRootFrac as LongInt
+    dim nRootFrac as SmInt
     if FractionalPowerResolveRootDegree(br, nRootFrac) then
-      ScalarComplexCartesianPrincipalNthRoot(ar, ai, 1.0 / CDbl(nRootFrac), outR, outI)
+      ScalarComplexCartesianPrincipalNthRoot(ar, ai, 1.0 / SmCFloat(nRootFrac), outR, outI)
       exit sub
     end if
-    if abs(br - Fix(br)) < 1e-12 then
-      dim n as LongInt = CLngInt(Fix(br))
+    '' Range-check the float before converting: SmCInt(Fix(huge)) wraps to SM_INT_MIN, and abs(SM_INT_MIN) <= 256.
+    if abs(br) < 257.0 andalso abs(br - Fix(br)) < SM_TOL_LOST3 then
+      dim n as SmInt = SmCInt(Fix(br))
       if abs(n) <= 256 then
         if n >= 0 then
           ScalarComplexPowIntegerNonneg ar, ai, n, outR, outI
         else
-          dim pr as Double, pi as Double
+          dim pr as SmFloat, pi as SmFloat
           ScalarComplexPowIntegerNonneg ar, ai, -n, pr, pi
-          dim den as Double = pr * pr + pi * pi
+          dim den as SmFloat = pr * pr + pi * pi
           if den = 0.0 then
             outR = MakeNaN()
             outI = MakeNaN()
@@ -7611,17 +7924,17 @@ private sub ScalarComplexPowPrincipal(byval ar as Double, byval ai as Double, by
       end if
     end if
   end if
-  dim loR as Double = log(mag)
-  dim loI as Double = CalcAtan2(ai, ar)
-  dim powRe as Double = br * loR - bi * loI
-  dim powIm as Double = br * loI + bi * loR
+  dim loR as SmFloat = log(mag)
+  dim loI as SmFloat = CalcAtan2(ai, ar)
+  dim powRe as SmFloat = br * loR - bi * loI
+  dim powIm as SmFloat = br * loI + bi * loR
   if IsTrigRadiansInRange(powIm) = FALSE then
     outR = MakeNaN()
     outI = MakeNaN()
     exit sub
   end if
-  dim er as Double = exp(powRe) * CalcCos(powIm)
-  dim ei as Double = exp(powRe) * CalcSin(powIm)
+  dim er as SmFloat = exp(powRe) * CalcCos(powIm)
+  dim ei as SmFloat = exp(powRe) * CalcSin(powIm)
   outR = er
   outI = ei
   ScalarSnapComplexNearZeroAxis(outR, outI)
@@ -7629,28 +7942,28 @@ end sub
 
 private sub ApplyComplexCaretPrincipalEval(byref leftS as ScalarValue, byref rightS as ScalarValue, byref outV as EvalValue)
   if TryApplyScalarPowSpecialPaths(leftS, rightS, outV) then exit sub
-  dim ar as Double
-  dim ai as Double
-  dim br as Double
-  dim bi as Double
+  dim ar as SmFloat
+  dim ai as SmFloat
+  dim br as SmFloat
+  dim bi as SmFloat
   ScalarLoadCartesian(leftS, ar, ai)
   ScalarLoadCartesian(rightS, br, bi)
-  dim powR as Double
-  dim powI as Double
+  dim powR as SmFloat
+  dim powI as SmFloat
   ScalarComplexPowPrincipal(ar, ai, br, bi, powR, powI)
   if TryRefinePowPrincipalToExactScalarResult(leftS, rightS, powR, powI, outV) then exit sub
-  ValueSetScalarComplexFromDoubles(outV, powR, powI)
+  ValueSetScalarComplexFromFloats(outV, powR, powI)
 end sub
 
-private function ComplexNeedsPrincipalNegRealPow(byval ar as Double, byval ai as Double, byval br as Double, byval bi as Double) as Boolean
+private function ComplexNeedsPrincipalNegRealPow(byval ar as SmFloat, byval ai as SmFloat, byval br as SmFloat, byval bi as SmFloat) as Boolean
   if ai <> 0.0 orelse bi <> 0.0 then return FALSE
   if ar >= 0.0 then return FALSE
   if IsNonFiniteValue(ar) orelse IsNonFiniteValue(br) then return FALSE
-  if abs(br - Fix(br)) < 1e-12 then return FALSE
+  if abs(br - Fix(br)) < SM_TOL_LOST3 then return FALSE
   return TRUE
 end function
 
-private sub ScalarComplexCartesianBinary(byval ar as Double, byval ai as Double, byval br as Double, byval bi as Double, byval op as UByte, byref outR as Double, byref outI as Double)
+private sub ScalarComplexCartesianBinary(byval ar as SmFloat, byval ai as SmFloat, byval br as SmFloat, byval bi as SmFloat, byval op as UByte, byref outR as SmFloat, byref outI as SmFloat)
   select case op
   case CHAR_PLUS
     outR = ar + br
@@ -7673,7 +7986,7 @@ private function ValueApplyBinaryScalarsComplex(byref leftS as ScalarValue, byre
       return FALSE
   end select
 
-  dim ar as Double, ai as Double, br as Double, bi as Double
+  dim ar as SmFloat, ai as SmFloat, br as SmFloat, bi as SmFloat
   ScalarLoadCartesian(leftS, ar, ai)
   ScalarLoadCartesian(rightS, br, bi)
 
@@ -7688,37 +8001,37 @@ private function ValueApplyBinaryScalarsComplex(byref leftS as ScalarValue, byre
 
   if op = CHAR_PLUS then
     if ScalarHasNonzeroImaginaryPart(leftS) = FALSE andalso ScalarHasNonzeroImaginaryPart(rightS) = FALSE then
-      dim lr as LongInt, rr as LongInt, ssum as LongInt
-      if TryGetExactInt64Scalar(leftS, lr) andalso TryGetExactInt64Scalar(rightS, rr) then
-        if TryAddInt64(lr, rr, ssum) then
-          ValueSetInt64(outV, ssum)
+      dim lr as SmInt, rr as SmInt, ssum as SmInt
+      if TryGetExactSmIntScalar(leftS, lr) andalso TryGetExactSmIntScalar(rightS, rr) then
+        if TryAddSmInt(lr, rr, ssum) then
+          ValueSetSmInt(outV, ssum)
           return TRUE
         end if
       end if
     end if
   end if
 
-  dim floatR as Double
-  dim floatI as Double
+  dim floatR as SmFloat
+  dim floatI as SmFloat
   ScalarComplexCartesianBinary(ar, ai, br, bi, op, floatR, floatI)
   outV.scalarValue.flags and= not CUInt(SVF_RENDER_RATIONAL or SVF_IMAG_RENDER_RATIONAL or SVF_RENDER_INT_POWER)
-  ValueSetScalarComplexFromDoubles(outV, floatR, floatI)
+  ValueSetScalarComplexFromFloats(outV, floatR, floatI)
   return TRUE
 end function
 
-private function TryApplyExactUInt64BinaryScalarOp(byval op as UByte, byval lu as ULongInt, byval ru as ULongInt, byref outV as EvalValue) as Boolean
+private function TryApplyExactSmUIntBinaryScalarOp(byval op as UByte, byval lu as SmUInt, byval ru as SmUInt, byref outV as EvalValue) as Boolean
   select case op
     case CHAR_PLUS
-      dim outU as ULongInt
-      if TryAddULongChecked(lu, ru, outU) then ValueSetUInt64(outV, outU): return TRUE
+      dim outU as SmUInt
+      if TryAddSmUIntChecked(lu, ru, outU) then ValueSetSmUInt(outV, outU): return TRUE
     case CHAR_MINUS
-      if lu >= ru then ValueSetUInt64(outV, lu - ru): return TRUE
+      if lu >= ru then ValueSetSmUInt(outV, lu - ru): return TRUE
     case CHAR_ASTERISK
-      dim outU as ULongInt
-      if TryMulULongChecked(lu, ru, outU) then ValueSetUInt64(outV, outU): return TRUE
+      dim outU as SmUInt
+      if TryMulSmUIntChecked(lu, ru, outU) then ValueSetSmUInt(outV, outU): return TRUE
     case CHAR_DIVIDE
-      dim quoU as ULongInt
-      if TryQuotExactULong(lu, ru, quoU) then ValueSetUInt64(outV, quoU): return TRUE
+      dim quoU as SmUInt
+      if TryQuotExactSmUInt(lu, ru, quoU) then ValueSetSmUInt(outV, quoU): return TRUE
   end select
   return FALSE
 end function
@@ -7731,7 +8044,7 @@ private function ValueApplyBinaryScalars(byref leftS as ScalarValue, byref right
     if ScalarHasNonzeroImaginaryPart(leftS) orelse ScalarHasNonzeroImaginaryPart(rightS) then
       return ValueApplyBinaryScalarsComplex(leftS, rightS, op, outV)
     elseif op = CHAR_CARET then
-      dim arP as Double, aiP as Double, brP as Double, biP as Double
+      dim arP as SmFloat, aiP as SmFloat, brP as SmFloat, biP as SmFloat
       ScalarLoadCartesian(leftS, arP, aiP)
       ScalarLoadCartesian(rightS, brP, biP)
       if ComplexNeedsPrincipalNegRealPow(arP, aiP, brP, biP) then
@@ -7740,53 +8053,53 @@ private function ValueApplyBinaryScalars(byref leftS as ScalarValue, byref right
     end if
   end if
 
-  dim li as LongInt, ri as LongInt, ro as LongInt
+  dim li as SmInt, ri as SmInt, ro as SmInt
   dim hasUIntL as Boolean
   dim hasUIntR as Boolean
-  dim lu as ULongInt, ru as ULongInt
-  hasUIntL = TryGetExactNonNegativeUInt64Scalar(leftS, lu)
-  hasUIntR = TryGetExactNonNegativeUInt64Scalar(rightS, ru)
-  if ScalarExactUInt64Valid(leftS) andalso ScalarExactUInt64Valid(rightS) _
-    andalso (ScalarExactInt64Valid(leftS) = FALSE orelse ScalarExactInt64Valid(rightS) = FALSE) then
-    if TryApplyExactUInt64BinaryScalarOp(op, leftS.exactUInt64, rightS.exactUInt64, outV) then return TRUE
+  dim lu as SmUInt, ru as SmUInt
+  hasUIntL = TryGetExactNonNegativeSmUIntScalar(leftS, lu)
+  hasUIntR = TryGetExactNonNegativeSmUIntScalar(rightS, ru)
+  if ScalarExactSmUIntValid(leftS) andalso ScalarExactSmUIntValid(rightS) _
+    andalso (ScalarExactSmIntValid(leftS) = FALSE orelse ScalarExactSmIntValid(rightS) = FALSE) then
+    if TryApplyExactSmUIntBinaryScalarOp(op, leftS.exactUInt, rightS.exactUInt, outV) then return TRUE
   end if
 
-  dim hasIntL as Boolean = ScalarExactInt64Valid(leftS)
-  dim hasIntR as Boolean = ScalarExactInt64Valid(rightS)
+  dim hasIntL as Boolean = ScalarExactSmIntValid(leftS)
+  dim hasIntR as Boolean = ScalarExactSmIntValid(rightS)
   if hasIntL then
-    li = leftS.exactInt64
-  elseif ScalarExactUInt64Valid(leftS) andalso leftS.exactUInt64 <= FB_I64_MAX_U then
+    li = leftS.exactInt
+  elseif ScalarExactSmUIntValid(leftS) andalso leftS.exactUInt <= SM_INT_MAX_U then
     hasIntL = TRUE
-    li = CLngInt(leftS.exactUInt64)
+    li = SmCInt(leftS.exactUInt)
   end if
   if hasIntR then
-    ri = rightS.exactInt64
-  elseif ScalarExactUInt64Valid(rightS) andalso rightS.exactUInt64 <= FB_I64_MAX_U then
+    ri = rightS.exactInt
+  elseif ScalarExactSmUIntValid(rightS) andalso rightS.exactUInt <= SM_INT_MAX_U then
     hasIntR = TRUE
-    ri = CLngInt(rightS.exactUInt64)
+    ri = SmCInt(rightS.exactUInt)
   end if
   if op = CHAR_CARET then
     if hasUIntL andalso hasUIntR then
-      dim powU as ULongInt
-      if TryPowULong(lu, ru, powU) then ValueSetUInt64(outV, powU): return TRUE
+      dim powU as SmUInt
+      if TryPowSmUInt(lu, ru, powU) then ValueSetSmUInt(outV, powU): return TRUE
     end if
     if hasIntL andalso hasUIntR andalso li < 0 then
-      dim baseMag as ULongInt
-      if li = FB_I64_MIN then
-        baseMag = FB_I64_MIN_MAG_U
+      dim baseMag as SmUInt
+      if li = SM_INT_MIN then
+        baseMag = SM_INT_MIN_MAG
       else
-        baseMag = CULngInt(-li)
+        baseMag = SmCUInt(-li)
       end if
-      dim powMag as ULongInt
-      if TryPowULong(baseMag, ru, powMag) then
-        if (ru and 1ull) = 0ull then
-          ValueSetUInt64(outV, powMag)
+      dim powMag as SmUInt
+      if TryPowSmUInt(baseMag, ru, powMag) then
+        if (ru and SmCUInt(1)) = SmCUInt(0) then
+          ValueSetSmUInt(outV, powMag)
           return TRUE
-        elseif powMag <= FB_I64_MIN_MAG_U then
-          if powMag = FB_I64_MIN_MAG_U then
-            ValueSetInt64(outV, FB_I64_MIN)
+        elseif powMag <= SM_INT_MIN_MAG then
+          if powMag = SM_INT_MIN_MAG then
+            ValueSetSmInt(outV, SM_INT_MIN)
           else
-            ValueSetInt64(outV, -CLngInt(powMag))
+            ValueSetSmInt(outV, -SmCInt(powMag))
           end if
           return TRUE
         end if
@@ -7796,28 +8109,28 @@ private function ValueApplyBinaryScalars(byref leftS as ScalarValue, byref right
   if hasIntL andalso hasIntR then
     select case op
       case CHAR_ASTERISK
-        if TryMulInt64(li, ri, ro) then ValueSetInt64(outV, ro): return TRUE
+        if TryMulSmInt(li, ri, ro) then ValueSetSmInt(outV, ro): return TRUE
       case CHAR_PLUS
-        if TryAddInt64(li, ri, ro) then ValueSetInt64(outV, ro): return TRUE
+        if TryAddSmInt(li, ri, ro) then ValueSetSmInt(outV, ro): return TRUE
       case CHAR_MINUS
-        if TrySubInt64(li, ri, ro) then ValueSetInt64(outV, ro): return TRUE
+        if TrySubSmInt(li, ri, ro) then ValueSetSmInt(outV, ro): return TRUE
       case CHAR_CARET
-        if TryPowInt64(li, ri, ro) then ValueSetInt64(outV, ro): return TRUE
+        if TryPowSmInt(li, ri, ro) then ValueSetSmInt(outV, ro): return TRUE
       case CHAR_DIVIDE
-        if TryQuotExactInt64(li, ri, ro) then ValueSetInt64(outV, ro): return TRUE
-        if li = FB_I64_MIN andalso ri = -1 then ValueSetUInt64(outV, FB_I64_MIN_MAG_U): return TRUE
+        if TryQuotExactSmInt(li, ri, ro) then ValueSetSmInt(outV, ro): return TRUE
+        if li = SM_INT_MIN andalso ri = -1 then ValueSetSmUInt(outV, SM_INT_MIN_MAG): return TRUE
     end select
   end if
 
   if hasUIntL andalso hasUIntR then
     if (op = CHAR_PLUS) orelse (op = CHAR_ASTERISK) orelse (op = CHAR_DIVIDE) then
-      if TryApplyExactUInt64BinaryScalarOp(op, lu, ru, outV) then return TRUE
+      if TryApplyExactSmUIntBinaryScalarOp(op, lu, ru, outV) then return TRUE
     end if
   end if
 
   select case op
     case CHAR_ASTERISK
-      dim r as Double = leftS.scalar * rightS.scalar
+      dim r as SmFloat = leftS.scalar * rightS.scalar
       if TryApplyExactIntegerMultiplicationFromProduct(leftS, rightS, r, outV) = FALSE then
         ValueSetScalar(outV, r)
       end if
@@ -7825,7 +8138,7 @@ private function ValueApplyBinaryScalars(byref leftS as ScalarValue, byref right
       if rightS.scalar = 0 andalso leftS.scalar = 0 then
         ValueSetScalar(outV, MakeNaN())
       else
-        dim r as Double = leftS.scalar / rightS.scalar
+        dim r as SmFloat = leftS.scalar / rightS.scalar
         if TryApplyExactIntegerDivisionFromQuotient(leftS, rightS, r, outV) = FALSE then
           ValueSetScalar(outV, r)
         end if
@@ -7839,15 +8152,15 @@ private function ValueApplyBinaryScalars(byref leftS as ScalarValue, byref right
   return TRUE
 end function
 
-declare function ValueApplyBinaryInt64Scalars(byref leftS as ScalarValue, byref rightS as ScalarValue, byval op as OperatorBitNameId, byref outV as EvalValue) as Boolean
+declare function ValueApplyBinarySmIntScalars(byref leftS as ScalarValue, byref rightS as ScalarValue, byval op as OperatorBitNameId, byref outV as EvalValue) as Boolean
 declare function ApplyScalarBinaryMathFunctionScalars(byref leftS as ScalarValue, byref rightS as ScalarValue, byval fnId as Integer, byref outV as EvalValue) as Boolean
 
 private const MAP_BINARY_OP_NUMERIC as Integer = 1
-private const MAP_BINARY_OP_INT64 as Integer = 2
+private const MAP_BINARY_OP_SMINT as Integer = 2
 private const MAP_BINARY_OP_SCALAR_MATH as Integer = 3
 
 private const BSD_NUMERIC as Integer = 1
-private const BSD_INT64 as Integer = 2
+private const BSD_INT as Integer = 2
 private const BSD_SCALAR_MATH as Integer = 3
 
 declare function ValueApplyBinaryTimeAware(byref leftV as EvalValue, byref rightV as EvalValue, byval op as UByte, byref outV as EvalValue) as Boolean
@@ -7862,7 +8175,7 @@ declare function MapBinaryBroadcastScalarsImpl( _
   byval fnId as Integer, _
   byref outV as EvalValue) as Boolean
 
-private function RejectInt64BinaryOperands(byref leftV as EvalValue, byref rightV as EvalValue, byval isModulo as Boolean) as Boolean
+private function RejectSmIntBinaryOperands(byref leftV as EvalValue, byref rightV as EvalValue, byval isModulo as Boolean) as Boolean
   if Parser_SupportTimeValues then
     if EvalValueInvolvesTime(leftV) orelse EvalValueInvolvesTime(rightV) then
       if isModulo then
@@ -7885,18 +8198,18 @@ end function
 private function ApplyBinaryEvalPolicy(byval kind as Integer, byref leftV as EvalValue, byref rightV as EvalValue, byval op as UByte, byval intOp as OperatorBitNameId, byval fnId as Integer, byref outV as EvalValue, byval tryTimeFirst as Boolean) as Boolean
   if tryTimeFirst then
     if ValueApplyBinaryTimeAware(leftV, rightV, op, outV) then
-      return (parseError = 0)
+      return (parseError = FALSE)
     end if
   end if
-  if kind = BSD_INT64 then
-    if RejectInt64BinaryOperands(leftV, rightV, intOp = OP_BIT_MOD) then
+  if kind = BSD_INT then
+    if RejectSmIntBinaryOperands(leftV, rightV, intOp = OP_BIT_MOD) then
       return FALSE
     end if
   end if
   dim mode as Integer = MAP_BINARY_OP_NUMERIC
   select case kind
     case BSD_NUMERIC: mode = MAP_BINARY_OP_NUMERIC
-    case BSD_INT64: mode = MAP_BINARY_OP_INT64
+    case BSD_INT: mode = MAP_BINARY_OP_SMINT
     case BSD_SCALAR_MATH: mode = MAP_BINARY_OP_SCALAR_MATH
     case else: return FALSE
   end select
@@ -7907,8 +8220,8 @@ private function TryMapBinaryPair(byval mode as Integer, byref leftS as ScalarVa
   select case mode
     case MAP_BINARY_OP_NUMERIC
       return ValueApplyBinaryScalars(leftS, rightS, op, outV)
-    case MAP_BINARY_OP_INT64
-      return ValueApplyBinaryInt64Scalars(leftS, rightS, intOp, outV)
+    case MAP_BINARY_OP_SMINT
+      return ValueApplyBinarySmIntScalars(leftS, rightS, intOp, outV)
     case MAP_BINARY_OP_SCALAR_MATH
       return ApplyScalarBinaryMathFunctionScalars(leftS, rightS, fnId, outV)
   end select
@@ -7986,18 +8299,18 @@ private function ApplyTimeBinaryScalars(byref leftS as ScalarValue, byref rightS
     return FALSE
   end if
 
-  dim lms as LongInt
-  dim rms as LongInt
-  dim outMs as LongInt
+  dim lms as SmInt
+  dim rms as SmInt
+  dim outMs as SmInt
 
   if lt then
     lms = TimeTotalMsFromScalarValue(leftS)
-  elseif TryRoundHalfUpDoubleToLongInt(leftS.scalar * 1000.0, lms) = FALSE then
+  elseif TryRoundHalfUpFloatToSmInt(leftS.scalar * 1000.0, lms) = FALSE then
     return FALSE
   end if
   if rt then
     rms = TimeTotalMsFromScalarValue(rightS)
-  elseif TryRoundHalfUpDoubleToLongInt(rightS.scalar * 1000.0, rms) = FALSE then
+  elseif TryRoundHalfUpFloatToSmInt(rightS.scalar * 1000.0, rms) = FALSE then
     return FALSE
   end if
 
@@ -8014,8 +8327,8 @@ private function ApplyTimeBinaryScalars(byref leftS as ScalarValue, byref rightS
       if lt andalso rt then
         return FALSE
       else
-        dim mult as Double
-        dim baseMs as LongInt
+        dim mult as SmFloat
+        dim baseMs as SmInt
         if lt then
           baseMs = lms
           mult = rightS.scalar
@@ -8024,21 +8337,21 @@ private function ApplyTimeBinaryScalars(byref leftS as ScalarValue, byref rightS
           mult = leftS.scalar
         end if
         if IsNonFiniteValue(mult) then return FALSE
-        if TryRoundHalfUpDoubleToLongInt(CDbl(baseMs) * mult, outMs) = FALSE then return FALSE
+        if TryRoundHalfUpFloatToSmInt(SmCFloat(baseMs) * mult, outMs) = FALSE then return FALSE
         ValueSetTimeMs(outV, outMs)
         return TRUE
       end if
     case CHAR_DIVIDE
       if lt andalso rt then
         if rms = 0 then return FALSE
-        dim ratio as Double = (CDbl(lms) / 1000.0) / (CDbl(rms) / 1000.0)
+        dim ratio as SmFloat = (SmCFloat(lms) / 1000.0) / (SmCFloat(rms) / 1000.0)
         if IsNonFiniteValue(ratio) then return FALSE
         ValueSetScalar(outV, ratio)
         return TRUE
       elseif lt andalso rt = FALSE then
         if rightS.scalar = 0.0 then return FALSE
-        dim td as Double = (CDbl(lms) / 1000.0) / rightS.scalar
-        if TryRoundHalfUpDoubleToLongInt(td * 1000.0, outMs) = FALSE then return FALSE
+        dim td as SmFloat = (SmCFloat(lms) / 1000.0) / rightS.scalar
+        if TryRoundHalfUpFloatToSmInt(td * 1000.0, outMs) = FALSE then return FALSE
         ValueSetTimeMs(outV, outMs)
         return TRUE
       else
@@ -8059,7 +8372,7 @@ private function ValueApplyBinaryTimeAware(byref leftV as EvalValue, byref right
     return TRUE
   end if
   if MapTimeBinaryBroadcastScalars(leftV, rightV, op, outV) = FALSE then
-    if parseError = 0 then SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
+    if parseError = FALSE then SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
     return TRUE
   end if
   return TRUE
@@ -8076,7 +8389,7 @@ private function ApplyScalarBinaryMathFunctionScalars(byref leftS as ScalarValue
       ValueSetScalarMaybeExact(outV, log(leftS.scalar) / log(rightS.scalar))
       return TRUE
     end if
-    dim ar as Double, ai as Double, br as Double, bi as Double
+    dim ar as SmFloat, ai as SmFloat, br as SmFloat, bi as SmFloat
     ScalarLoadCartesian(leftS, ar, ai)
     ScalarLoadCartesian(rightS, br, bi)
     dim pureReal as Boolean
@@ -8086,23 +8399,23 @@ private function ApplyScalarBinaryMathFunctionScalars(byref leftS as ScalarValue
       return TRUE
     end if
     if IsNaNValue(ar) orelse IsNaNValue(ai) orelse IsNaNValue(br) orelse IsNaNValue(bi) then
-      ValueSetScalarComplexFromDoubles(outV, MakeNaN(), MakeNaN())
+      ValueSetScalarComplexFromFloats(outV, MakeNaN(), MakeNaN())
       return TRUE
     end if
     '' Same domain errors as real-only log: log of 0, base 0, base 1.
     if (ar = 0.0 andalso ai = 0.0) orelse (br = 0.0 andalso bi = 0.0) orelse (br = 1.0 andalso bi = 0.0) then return FALSE
-    dim lnr as Double, lni as Double, rnr as Double, rni as Double
+    dim lnr as SmFloat, lni as SmFloat, rnr as SmFloat, rni as SmFloat
     ScalarPrincipalLnCartesian ar, ai, lnr, lni
     ScalarPrincipalLnCartesian br, bi, rnr, rni
-    dim den as Double = rnr * rnr + rni * rni
+    dim den as SmFloat = rnr * rnr + rni * rni
     if den = 0.0 then
-      ValueSetScalarComplexFromDoubles(outV, MakeNaN(), MakeNaN())
+      ValueSetScalarComplexFromFloats(outV, MakeNaN(), MakeNaN())
       return TRUE
     end if
-    dim outR as Double = (lnr * rnr + lni * rni) / den
-    dim outI as Double = (lni * rnr - lnr * rni) / den
+    dim outR as SmFloat = (lnr * rnr + lni * rni) / den
+    dim outI as SmFloat = (lni * rnr - lnr * rni) / den
     ScalarSnapComplexNearZeroAxis(outR, outI)
-    ValueSetScalarComplexFromDoubles(outV, outR, outI)
+    ValueSetScalarComplexFromFloats(outV, outR, outI)
     return TRUE
   end if
   if fnId = FUNC_ATAN2 then
@@ -8116,15 +8429,15 @@ private function ApplyScalarBinaryMathFunctionScalars(byref leftS as ScalarValue
   if fnId = FUNC_HYPOT then
     if Parser_SupportComplexNumbers then
       if ScalarHasNonzeroImaginaryPart(leftS) orelse ScalarHasNonzeroImaginaryPart(rightS) then
-        dim ar as Double, ai as Double, br as Double, bi as Double
+        dim ar as SmFloat, ai as SmFloat, br as SmFloat, bi as SmFloat
         ScalarLoadCartesian(leftS, ar, ai)
         ScalarLoadCartesian(rightS, br, bi)
         if IsNaNValue(ar) orelse IsNaNValue(ai) orelse IsNaNValue(br) orelse IsNaNValue(bi) then
           ValueSetScalar(outV, MakeNaN())
           return TRUE
         end if
-        dim ml as Double = CalcHypot(ar, ai)
-        dim mr as Double = CalcHypot(br, bi)
+        dim ml as SmFloat = CalcHypot(ar, ai)
+        dim mr as SmFloat = CalcHypot(br, bi)
         ValueSetScalarMaybeExact(outV, CalcHypot(ml, mr))
         return TRUE
       end if
@@ -8141,71 +8454,71 @@ private function ApplyScalarBinaryMathFunctionValues(byref leftV as EvalValue, b
   return ApplyBinaryEvalPolicy(BSD_SCALAR_MATH, leftV, rightV, 0, OP_BIT_NONE, fnId, outV, FALSE)
 end function
 
-private function TryShiftLeftUInt64MaybeExact( _
+private function TryShiftLeftSmUIntMaybeExact( _
   byref outV as EvalValue, _
-  byval leftU as ULongInt, _
-  byval leftScalar as Double, _
-  byval shiftU as ULongInt) as Boolean
-  if shiftU > 63ull then return FALSE
-  if shiftU > 0ull andalso leftU > (FB_U64_MAX shr CInt(shiftU)) then
-    ValueSetScalar(outV, leftScalar * pow(2.0, CDbl(shiftU)))
+  byval leftU as SmUInt, _
+  byval leftScalar as SmFloat, _
+  byval shiftU as SmUInt) as Boolean
+  if shiftU > SmCUInt(SM_MAX_SHIFT) then return FALSE
+  if shiftU > SmCUInt(0) andalso leftU > (SM_UINT_MAX shr CInt(shiftU)) then
+    ValueSetScalar(outV, leftScalar * pow(2.0, SmCFloat(shiftU)))
     return TRUE
   end if
-  ValueSetUInt64(outV, leftU shl CInt(shiftU))
+  ValueSetSmUInt(outV, leftU shl CInt(shiftU))
   return TRUE
 end function
 
-private function ValueApplyBinaryInt64Scalars(byref leftS as ScalarValue, byref rightS as ScalarValue, byval op as OperatorBitNameId, byref outV as EvalValue) as Boolean
+private function ValueApplyBinarySmIntScalars(byref leftS as ScalarValue, byref rightS as ScalarValue, byval op as OperatorBitNameId, byref outV as EvalValue) as Boolean
   dim requiresIntegers as Boolean = (op = OP_BIT_SHL orelse op = OP_BIT_SHR orelse op = OP_BIT_AND orelse op = OP_BIT_XOR orelse op = OP_BIT_OR)
-  dim l as LongInt, r as LongInt
+  dim l as SmInt, r as SmInt
 
   if op = OP_BIT_SHL then
-    dim luShl as ULongInt, ruShl as ULongInt
-    if TryGetExactNonNegativeUInt64Scalar(leftS, luShl) andalso TryGetExactNonNegativeUInt64Scalar(rightS, ruShl) then
-      return TryShiftLeftUInt64MaybeExact(outV, luShl, leftS.scalar, ruShl)
+    dim luShl as SmUInt, ruShl as SmUInt
+    if TryGetExactNonNegativeSmUIntScalar(leftS, luShl) andalso TryGetExactNonNegativeSmUIntScalar(rightS, ruShl) then
+      return TryShiftLeftSmUIntMaybeExact(outV, luShl, leftS.scalar, ruShl)
     end if
   end if
 
-  if leftS.exactUInt64Valid andalso rightS.exactUInt64Valid then
-    dim lu as ULongInt = leftS.exactUInt64
-    dim ru as ULongInt = rightS.exactUInt64
+  if leftS.exactUIntValid andalso rightS.exactUIntValid then
+    dim lu as SmUInt = leftS.exactUInt
+    dim ru as SmUInt = rightS.exactUInt
     select case op
       case OP_BIT_SHL
-        return TryShiftLeftUInt64MaybeExact(outV, lu, leftS.scalar, ru)
+        return TryShiftLeftSmUIntMaybeExact(outV, lu, leftS.scalar, ru)
       case OP_BIT_SHR
-        if ru > 63ull then return FALSE
-        ValueSetUInt64(outV, lu shr CInt(ru))
+        if ru > SmCUInt(SM_MAX_SHIFT) then return FALSE
+        ValueSetSmUInt(outV, lu shr CInt(ru))
         return TRUE
       case OP_BIT_AND
-        ValueSetUInt64(outV, lu and ru)
+        ValueSetSmUInt(outV, lu and ru)
         return TRUE
       case OP_BIT_XOR
-        ValueSetUInt64(outV, lu xor ru)
+        ValueSetSmUInt(outV, lu xor ru)
         return TRUE
       case OP_BIT_OR
-        ValueSetUInt64(outV, lu or ru)
+        ValueSetSmUInt(outV, lu or ru)
         return TRUE
       case OP_BIT_MOD
-        if ru = 0ull then return FALSE
-        ValueSetUInt64(outV, lu mod ru)
+        if ru = SmCUInt(0) then return FALSE
+        ValueSetSmUInt(outV, lu mod ru)
         return TRUE
     end select
   end if
 
   if op = OP_BIT_MOD then
     dim lNeg as Boolean, rNeg as Boolean
-    dim lMag as ULongInt, rMag as ULongInt
+    dim lMag as SmUInt, rMag as SmUInt
     if (TryGetExactSignMagnitudeScalar(leftS, lNeg, lMag) = FALSE) orelse (TryGetExactSignMagnitudeScalar(rightS, rNeg, rMag) = FALSE) then
       SetParseErrorById(PARSE_ERR_MODULO_INTEGER_OPERANDS)
       return FALSE
     end if
-    if rMag = 0ull then return FALSE
+    if rMag = SmCUInt(0) then return FALSE
     ValueSetFromSignMagnitude(outV, lNeg, lMag mod rMag)
     return TRUE
   end if
 
   if requiresIntegers then
-    if (TryGetExactInt64Scalar(leftS, l) = FALSE) orelse (TryGetExactInt64Scalar(rightS, r) = FALSE) then
+    if (TryGetExactSmIntScalar(leftS, l) = FALSE) orelse (TryGetExactSmIntScalar(rightS, r) = FALSE) then
       SetParseErrorById(PARSE_ERR_BITWISE_INTEGER_OPERANDS)
       return FALSE
     end if
@@ -8213,35 +8526,97 @@ private function ValueApplyBinaryInt64Scalars(byref leftS as ScalarValue, byref 
 
   select case op
     case OP_BIT_SHL
-      if r < 0 orelse r > 63 then return FALSE
-      '' Out of int64 range: float l * 2^r, same as the uint64 overflow path.
-      '' Bounds go through variables: fbc -arch x86_64 shifts the FB_I64_MIN const logically.
-      dim shlLo as LongInt = FB_I64_MIN
-      dim shlHi as LongInt = FB_I64_MAX
+      if r < 0 orelse r > SM_MAX_SHIFT then return FALSE
+      '' Out of SmInt range: float l * 2^r, same as the SmUInt overflow path.
+      '' Bounds go through variables: fbc -arch x86_64 shifts the SM_INT_MIN const logically.
+      dim shlLo as SmInt = SM_INT_MIN
+      dim shlHi as SmInt = SM_INT_MAX
       shlLo = shlLo shr r
       shlHi = shlHi shr r
       if l < shlLo orelse l > shlHi then
-        ValueSetScalar(outV, CDbl(l) * pow(2.0, CDbl(r)))
+        ValueSetScalar(outV, SmCFloat(l) * pow(2.0, SmCFloat(r)))
       else
-        ValueSetInt64(outV, l shl r)
+        ValueSetSmInt(outV, l shl r)
       end if
     case OP_BIT_SHR
-      if r < 0 orelse r > 63 then return FALSE
-      ValueSetInt64(outV, l shr r)
+      if r < 0 orelse r > SM_MAX_SHIFT then return FALSE
+      ValueSetSmInt(outV, l shr r)
     case OP_BIT_AND
-      ValueSetInt64(outV, l and r)
+      ValueSetSmInt(outV, l and r)
     case OP_BIT_XOR
-      ValueSetInt64(outV, l xor r)
+      ValueSetSmInt(outV, l xor r)
     case OP_BIT_OR
-      ValueSetInt64(outV, l or r)
+      ValueSetSmInt(outV, l or r)
     case else
       return FALSE
   end select
   return TRUE
 end function
 
-private function ValueApplyBinaryInt64(byref leftV as EvalValue, byref rightV as EvalValue, byval op as OperatorBitNameId, byref outV as EvalValue) as Boolean
-  return ApplyBinaryEvalPolicy(BSD_INT64, leftV, rightV, 0, op, -1, outV, FALSE)
+private function ValueApplyBinarySmInt(byref leftV as EvalValue, byref rightV as EvalValue, byval op as OperatorBitNameId, byref outV as EvalValue) as Boolean
+  return ApplyBinaryEvalPolicy(BSD_INT, leftV, rightV, 0, op, -1, outV, FALSE)
+end function
+
+'' Three-way compare of two sign-magnitude integers (zero is never negative).
+private function CmpSignMagnitude(byval aNeg as Boolean, byval aMag as SmUInt, byval bNeg as Boolean, byval bMag as SmUInt) as Integer
+  if aMag = SmCUInt(0) then aNeg = FALSE
+  if bMag = SmCUInt(0) then bNeg = FALSE
+  if aNeg <> bNeg then
+    if aNeg then return -1
+    return 1
+  end if
+  dim c as Integer = 0
+  if aMag < bMag then
+    c = -1
+  elseif aMag > bMag then
+    c = 1
+  end if
+  if aNeg then return -c
+  return c
+end function
+
+'' Exact three-way compare of an integer (sign-magnitude) with a float that is not NaN.
+private function CmpSignMagnitudeWithFloat(byval neg as Boolean, byval mag as SmUInt, byval f as SmFloat) as Integer
+  if mag = SmCUInt(0) then neg = FALSE
+  dim fa as SmFloat = abs(f)
+  dim fNeg as Boolean = (f < 0) andalso (fa <> 0)
+  if neg <> fNeg then
+    if neg then return -1
+    return 1
+  end if
+  dim c as Integer = 0
+  if fa >= SM_FLOAT_SMUINT_BOUND then
+    c = -1  '' |f| exceeds every SmUInt magnitude (this includes infinity)
+  else
+    dim fl as SmFloat = floor(fa)
+    dim u as SmUInt = SmCUInt(fl)
+    if mag < u then
+      c = -1
+    elseif mag > u then
+      c = 1
+    elseif fa > fl then
+      c = -1
+    end if
+  end if
+  if neg then return -c
+  return c
+end function
+
+'' Real three-way compare, neither operand NaN. SmFloat is exact only below 2^mantissa; at or above it the exact
+'' SmInt/SmUInt metadata decides, so 9007199254740993 > 9007199254740992 and uintmax - 1 < uintmax.
+private function CmpRealScalars(byref sa as ScalarValue, byref sb as ScalarValue) as Integer
+  if abs(sa.scalar) >= SM_MAX_EXACT_INT_FROM_FLOAT orelse abs(sb.scalar) >= SM_MAX_EXACT_INT_FROM_FLOAT then
+    dim aNeg as Boolean, bNeg as Boolean
+    dim aMag as SmUInt, bMag as SmUInt
+    dim aExact as Boolean = TryGetExactSignMagnitudeScalar(sa, aNeg, aMag)
+    dim bExact as Boolean = TryGetExactSignMagnitudeScalar(sb, bNeg, bMag)
+    if aExact andalso bExact then return CmpSignMagnitude(aNeg, aMag, bNeg, bMag)
+    if aExact then return CmpSignMagnitudeWithFloat(aNeg, aMag, sb.scalar)
+    if bExact then return -CmpSignMagnitudeWithFloat(bNeg, bMag, sa.scalar)
+  end if
+  if sa.scalar < sb.scalar then return -1
+  if sa.scalar > sb.scalar then return 1
+  return 0
 end function
 
 private function CmpScalarValuesForCompare(byref sa as ScalarValue, byref sb as ScalarValue, byref cmp as Integer) as Boolean
@@ -8254,8 +8629,8 @@ private function CmpScalarValuesForCompare(byref sa as ScalarValue, byref sb as 
   end if
 
   if ta orelse tb then
-    dim lm as LongInt
-    dim rm as LongInt
+    dim lm as SmInt
+    dim rm as SmInt
     if ta then
       lm = TimeTotalMsFromScalarValue(sa)
     elseif ScalarToSecondsMsForTimeOp(sa, lm) = FALSE then
@@ -8277,7 +8652,7 @@ private function CmpScalarValuesForCompare(byref sa as ScalarValue, byref sb as 
   end if
 
   if ha orelse hb then
-    dim ar as Double, ai as Double, br as Double, bi as Double
+    dim ar as SmFloat, ai as SmFloat, br as SmFloat, bi as SmFloat
     ScalarLoadCartesian(sa, ar, ai)
     ScalarLoadCartesian(sb, br, bi)
     if IsNaNValue(ar) orelse IsNaNValue(ai) orelse IsNaNValue(br) orelse IsNaNValue(bi) then
@@ -8298,12 +8673,10 @@ private function CmpScalarValuesForCompare(byref sa as ScalarValue, byref sb as 
     return TRUE
   end if
 
-  if sa.scalar < sb.scalar then
-    cmp = -1
-  elseif sa.scalar > sb.scalar then
-    cmp = 1
-  else
+  if IsNaNValue(sa.scalar) orelse IsNaNValue(sb.scalar) then
     cmp = 0
+  else
+    cmp = CmpRealScalars(sa, sb)
   end if
   return TRUE
 end function
@@ -8318,7 +8691,7 @@ end function
 private function ScalarPairHasUnorderedNan(byref a as ScalarValue, byref b as ScalarValue) as Boolean
   if ScalarIsTime(a) orelse ScalarIsTime(b) then return FALSE
   if Parser_SupportComplexNumbers then
-    dim ar as Double, ai as Double, br as Double, bi as Double
+    dim ar as SmFloat, ai as SmFloat, br as SmFloat, bi as SmFloat
     ScalarLoadCartesian(a, ar, ai)
     ScalarLoadCartesian(b, br, bi)
     return IsNaNValue(ar) orelse IsNaNValue(ai) orelse IsNaNValue(br) orelse IsNaNValue(bi)
@@ -8337,8 +8710,8 @@ private function CmpScalarValuesForSortOrder(byref sa as ScalarValue, byref sb a
   end if
 
   if ta orelse tb then
-    dim lm as LongInt
-    dim rm as LongInt
+    dim lm as SmInt
+    dim rm as SmInt
     if ta then
       lm = TimeTotalMsFromScalarValue(sa)
     elseif ScalarToSecondsMsForTimeOp(sa, lm) = FALSE then
@@ -8360,7 +8733,7 @@ private function CmpScalarValuesForSortOrder(byref sa as ScalarValue, byref sb a
   end if
 
   if ha orelse hb then
-    dim ar as Double, ai as Double, br as Double, bi as Double
+    dim ar as SmFloat, ai as SmFloat, br as SmFloat, bi as SmFloat
     ScalarLoadCartesian(sa, ar, ai)
     ScalarLoadCartesian(sb, br, bi)
     if IsNaNValue(ar) orelse IsNaNValue(ai) orelse IsNaNValue(br) orelse IsNaNValue(bi) then
@@ -8396,13 +8769,7 @@ private function CmpScalarValuesForSortOrder(byref sa as ScalarValue, byref sb a
     return TRUE
   end if
 
-  if sa.scalar < sb.scalar then
-    cmp = -1
-  elseif sa.scalar > sb.scalar then
-    cmp = 1
-  else
-    cmp = 0
-  end if
+  cmp = CmpRealScalars(sa, sb)
   return TRUE
 end function
 
@@ -8492,7 +8859,7 @@ end function
 
 private function ApplyComparison(byref leftV as EvalValue, byref rightV as EvalValue, byval op as OperatorCmpNameId, byref outV as EvalValue) as Boolean
   if syntaxCheckDepth > 0 then
-    ValueSetInt64(outV, 0)
+    ValueSetSmInt(outV, 0)
     return TRUE
   end if
   if leftV.kind = VK_SCALAR andalso rightV.kind = VK_SCALAR then
@@ -8562,9 +8929,9 @@ private function ApplyComparison(byref leftV as EvalValue, byref rightV as EvalV
       case OP_CMP_NONE
         return FALSE
       case OP_CMP_NE
-        ValueSetInt64(outV, 1)
+        ValueSetSmInt(outV, 1)
       case else
-        ValueSetInt64(outV, 0)
+        ValueSetSmInt(outV, 0)
       end select
       return TRUE
     end if
@@ -8574,9 +8941,9 @@ private function ApplyComparison(byref leftV as EvalValue, byref rightV as EvalV
     if c <> 0 then
       isTrue = ComparisonOpIsTrue(op, c)
       if isTrue then
-        ValueSetInt64(outV, 1)
+        ValueSetSmInt(outV, 1)
       else
-        ValueSetInt64(outV, 0)
+        ValueSetSmInt(outV, 0)
       end if
       return TRUE
     end if
@@ -8597,9 +8964,9 @@ private function ApplyComparison(byref leftV as EvalValue, byref rightV as EvalV
     isTrue = ComparisonOpIsTrue(op, cmp)
   end select
   if isTrue then
-    ValueSetInt64(outV, 1)
+    ValueSetSmInt(outV, 1)
   else
-    ValueSetInt64(outV, 0)
+    ValueSetSmInt(outV, 0)
   end if
   return TRUE
 end function
@@ -8608,8 +8975,8 @@ private function EvalValueIsTruthy(byref v as EvalValue) as Boolean
   if v.kind = VK_ARRAY then
     return (ValueArrayLen(v) > 0)
   end if
-  dim tr as Double
-  dim ti as Double
+  dim tr as SmFloat
+  dim ti as SmFloat
   ScalarLoadCartesian(v.scalarValue, tr, ti)
   if IsNaNValue(tr) orelse IsNaNValue(ti) then return FALSE
   return (tr <> 0.0) orelse (ti <> 0.0)
@@ -8617,18 +8984,18 @@ end function
 
 private sub ValueSetBoolResult(byval b as Boolean, byref outV as EvalValue)
   if b then
-    ValueSetInt64(outV, 1)
+    ValueSetSmInt(outV, 1)
   else
-    ValueSetInt64(outV, 0)
+    ValueSetSmInt(outV, 0)
   end if
 end sub
 
-private function ApplyInt64ParserOp(byref leftV as EvalValue, byref rightV as EvalValue, byval op as OperatorBitNameId, byref outV as EvalValue) as Boolean
+private function ApplySmIntParserOp(byref leftV as EvalValue, byref rightV as EvalValue, byval op as OperatorBitNameId, byref outV as EvalValue) as Boolean
   if syntaxCheckDepth > 0 then
-    ValueSetInt64(outV, 0)
+    ValueSetSmInt(outV, 0)
     return TRUE
   end if
-  if ValueApplyBinaryInt64(leftV, rightV, op, outV) = FALSE then
+  if ValueApplyBinarySmInt(leftV, rightV, op, outV) = FALSE then
     SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
     return FALSE
   end if
@@ -8637,7 +9004,7 @@ end function
 
 private function ApplyBinaryParserOp(byref leftV as EvalValue, byref rightV as EvalValue, byval op as UByte, byref outV as EvalValue) as Boolean
   if syntaxCheckDepth > 0 then
-    ValueSetInt64(outV, 0)
+    ValueSetSmInt(outV, 0)
     return TRUE
   end if
   if ApplyBinaryEvalPolicy(BSD_NUMERIC, leftV, rightV, op, OP_BIT_NONE, -1, outV, TRUE) = FALSE then
@@ -8647,9 +9014,9 @@ private function ApplyBinaryParserOp(byref leftV as EvalValue, byref rightV as E
   return TRUE
 end function
 
-private sub ApplyInt64ParserOpInPlace(byref leftV as EvalValue, byref rightV as EvalValue, byval op as OperatorBitNameId)
+private sub ApplySmIntParserOpInPlace(byref leftV as EvalValue, byref rightV as EvalValue, byval op as OperatorBitNameId)
   dim outV as EvalValue
-  if ApplyInt64ParserOp(leftV, rightV, op, outV) then leftV = outV
+  if ApplySmIntParserOp(leftV, rightV, op, outV) then leftV = outV
 end sub
 
 private sub ApplyBinaryParserOpInPlace(byref leftV as EvalValue, byref rightV as EvalValue, byval op as UByte)
@@ -8667,7 +9034,7 @@ private sub ApplyComparisonParserOpInPlace(byref leftV as EvalValue, byref right
 end sub
 
 declare function ArgWalkNextPosition(args() as EvalValue, byref argIdx as Integer, byref elemIdx as Integer, byref srcArgIdx as Integer, byref srcElemIdx as Integer, byref isScalar as Boolean) as Boolean
-declare function ArgScalarWalkNext(args() as EvalValue, byref argIdx as Integer, byref elemIdx as Integer, byref outV as Double) as Boolean
+declare function ArgScalarWalkNext(args() as EvalValue, byref argIdx as Integer, byref elemIdx as Integer, byref outV as SmFloat) as Boolean
 declare function ArgScalarValueWalkNext(args() as EvalValue, byref argIdx as Integer, byref elemIdx as Integer, byref outV as ScalarValue) as Boolean
 
 private function TryBuiltinMapBinaryTwoArgCore(args() as EvalValue, byref fnName as String, byval fnId as Integer, byval rejectComplex as Boolean, byref outV as EvalValue) as Boolean
@@ -8687,7 +9054,7 @@ end function
 private function ArgsContainNonFinite(args() as EvalValue) as Boolean
   dim argIdx as Integer = lbound(args)
   dim elemIdx as Integer = -1
-  dim item as Double
+  dim item as SmFloat
   while ArgScalarWalkNext(args(), argIdx, elemIdx, item)
     if IsNonFiniteValue(item) then return TRUE
   wend
@@ -8695,13 +9062,13 @@ private function ArgsContainNonFinite(args() as EvalValue) as Boolean
 end function
 
 private function ScalarIntegerRepresentableForFormat(byref sv as ScalarValue, byval allowNonFiniteForFormat as Boolean) as Boolean
-  dim ar as Double, ai as Double
+  dim ar as SmFloat, ai as SmFloat
   ScalarLoadCartesian(sv, ar, ai)
 
   if IsNonFiniteValue(ar) then
     if allowNonFiniteForFormat = FALSE then return FALSE
   else
-    if (sv.exactInt64Valid = FALSE) andalso (sv.exactUInt64Valid = FALSE) then
+    if (sv.exactIntValid = FALSE) andalso (sv.exactUIntValid = FALSE) then
       dim tmpRe as String
       if FormatHexScalar(ar, tmpRe, TRUE) = FALSE then return FALSE
     end if
@@ -8712,10 +9079,10 @@ private function ScalarIntegerRepresentableForFormat(byref sv as ScalarValue, by
 
   if IsNonFiniteValue(ai) then return allowNonFiniteForFormat
 
-  if ScalarImagExactInt64Valid(sv) orelse ScalarImagExactUInt64Valid(sv) then return TRUE
+  if ScalarImagExactSmIntValid(sv) orelse ScalarImagExactSmUIntValid(sv) then return TRUE
 
-  dim tmpIm as LongInt
-  return TryGetExactInt64FromDouble(ai, tmpIm)
+  dim tmpIm as SmInt
+  return TryGetExactSmIntFromFloat(ai, tmpIm)
 end function
 
 private function ValidateIntegerRepresentableArgs(args() as EvalValue, byref fnName as String, byval allowNonFiniteForFormat as Boolean) as Boolean
@@ -8810,7 +9177,7 @@ private function IsImplicitMulStart() as Boolean
   return FALSE
 end function
 
-private function TryParsePrefixedUIntLiteral(byval prefixChar as UByte, byval radix as ULongInt, byref outV as ULongInt) as Boolean
+private function TryParsePrefixedSmUIntLiteral(byval prefixChar as UByte, byval radix as SmUInt, byref outV as SmUInt) as Boolean
   dim p as ZString ptr = pStream
   if p[0] <> CHAR_DIGIT_0 then return FALSE
   dim prefixUpper as UByte = prefixChar
@@ -8819,7 +9186,7 @@ private function TryParsePrefixedUIntLiteral(byval prefixChar as UByte, byval ra
   end if
   if p[1] <> prefixChar andalso p[1] <> prefixUpper then return FALSE
   p += 2
-  dim parsed as ULongInt = 0
+  dim parsed as SmUInt = 0
   dim digits as Integer = 0
   while TRUE
     dim c as UByte = p[0]
@@ -8833,11 +9200,11 @@ private function TryParsePrefixedUIntLiteral(byval prefixChar as UByte, byval ra
     else
       exit while
     end if
-    if d < 0 orelse CULngInt(d) >= radix then exit while
-    if parsed > ((FB_U64_MAX - CULngInt(d)) \ radix) then
+    if d < 0 orelse SmCUInt(d) >= radix then exit while
+    if parsed > ((SM_UINT_MAX - SmCUInt(d)) \ radix) then
       return FALSE
     end if
-    parsed = parsed * radix + CULngInt(d)
+    parsed = parsed * radix + SmCUInt(d)
     digits += 1
     p += 1
   wend
@@ -8850,32 +9217,34 @@ end function
 declare function TryBuiltinDispatchWithTime(byval fnId as Integer, byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
 declare function TryBuiltinDispatchWithComplex(byval fnId as Integer, byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
 declare function TryEvaluateBuiltinAggregate(byval fnId as Integer, byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
-declare function TryApproximateRational(byval x as Double, byref num as LongInt, byref den as ULongInt) as Boolean
-declare sub ValueSetRationalReduced(byref outV as EvalValue, byval num as LongInt, byval den as ULongInt)
+declare function TryApproximateRational(byval x as SmFloat, byref num as SmInt, byref den as SmUInt) as Boolean
+declare sub ValueSetRationalReduced(byref outV as EvalValue, byval num as SmInt, byval den as SmUInt)
 declare function TryBuiltinSortby(byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
 declare function TryBuiltinRatio(byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
 declare function TryParseUnaryFunctionCallArguments(args() as EvalValue, byref argsCount as Integer, byref argsCap as Integer, byref expectsOne as String, byref expectsUnary as String) as Boolean
 declare function TryParseUnaryFunctionRef(byref outV as EvalValue, byref expectsOne as String, byref expectsUnary as String) as Boolean
 declare function TryBuiltinFilter(byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
 declare function TryDispatchBuiltinCall(byval fnId as Integer, byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
-declare function TryEvaluateStatementCore(byref exprInput as String, byref result as Double, byref resultText as String, byref isArray as Boolean, byval suppressTailHint as Boolean) as Boolean
+declare function TryEvaluateStatementCore(byref exprInput as String, byref result as SmFloat, byref resultText as String, byref isArray as Boolean, byval suppressTailHint as Boolean) as Boolean
 declare function IsStmtUdfDefinitionAt(byref stmt as String) as Boolean
 declare function TrySingleArgPassthroughOrCollect(args() as EvalValue, byref fnName as String, byval reverseSingleArray as Boolean, byref outV as EvalValue, vals() as ScalarValue, byref c as Integer) as Integer
 
+'' O(argc) capacity from arg shapes (no per-element walk).
 private function CountFlattenedArgs(args() as EvalValue) as Integer
+  if ubound(args) = -1 then return 0
   dim count as Integer = 0
-  dim argIdx as Integer = lbound(args)
-  dim elemIdx as Integer = -1
-  dim srcArgIdx as Integer
-  dim srcElemIdx as Integer
-  dim isScalar as Boolean
-  while ArgWalkNextPosition(args(), argIdx, elemIdx, srcArgIdx, srcElemIdx, isScalar)
-    count += 1
-  wend
+  dim i as Integer
+  for i = lbound(args) to ubound(args)
+    if args(i).kind = VK_SCALAR then
+      count += 1
+    else
+      count += ValueArrayLen(args(i))
+    end if
+  next i
   return count
 end function
 
-private function CollectArgsAsFlat(args() as EvalValue, flat() as Double) as Integer
+private function CollectArgsAsFlat(args() as EvalValue, flat() as SmFloat) as Integer
   dim count as Integer = CountFlattenedArgs(args())
   if count <= 0 then return 0
   redim flat(0 to count - 1)
@@ -8883,7 +9252,7 @@ private function CollectArgsAsFlat(args() as EvalValue, flat() as Double) as Int
   dim flatPos as Integer = 0
   dim argIdx as Integer = lbound(args)
   dim elemIdx as Integer = -1
-  dim item as Double
+  dim item as SmFloat
   while ArgScalarWalkNext(args(), argIdx, elemIdx, item)
     flat(flatPos) = item
     flatPos += 1
@@ -8891,7 +9260,7 @@ private function CollectArgsAsFlat(args() as EvalValue, flat() as Double) as Int
   return count
 end function
 
-private function CollectRequiredArgsAsFlat(args() as EvalValue, flat() as Double, byref fnName as String) as Integer
+private function CollectRequiredArgsAsFlat(args() as EvalValue, flat() as SmFloat, byref fnName as String) as Integer
   dim count as Integer = CollectArgsAsFlat(args(), flat())
   if count <= 0 then
     SetAtLeastOneArgError(fnName)
@@ -8964,7 +9333,7 @@ private function ArgWalkNextPosition(args() as EvalValue, byref argIdx as Intege
   return FALSE
 end function
 
-private function ArgScalarWalkNext(args() as EvalValue, byref argIdx as Integer, byref elemIdx as Integer, byref outV as Double) as Boolean
+private function ArgScalarWalkNext(args() as EvalValue, byref argIdx as Integer, byref elemIdx as Integer, byref outV as SmFloat) as Boolean
   dim srcArgIdx as Integer
   dim srcElemIdx as Integer
   dim isScalar as Boolean
@@ -8993,10 +9362,10 @@ end function
 '' Exact integer metadata for min/max winner tie-break (not render-rational storage).
 private function ScalarHasExactIntegerMetadata(byref sv as ScalarValue) as Boolean
   if ScalarHasRenderRational(sv) then return FALSE
-  return ScalarExactInt64Valid(sv) orelse ScalarExactUInt64Valid(sv)
+  return ScalarExactSmIntValid(sv) orelse ScalarExactSmUIntValid(sv)
 end function
 
-private function ScalarMinMaxShouldReplaceWinner(byval wantMin as Boolean, byval v as Double, byval winnerV as Double, byval hasWinner as Boolean) as Boolean
+private function ScalarMinMaxShouldReplaceWinner(byval wantMin as Boolean, byval v as SmFloat, byval winnerV as SmFloat, byval hasWinner as Boolean) as Boolean
   if hasWinner = FALSE then return TRUE
   if wantMin then
     return v < winnerV
@@ -9015,13 +9384,13 @@ private function TryMinMaxPreserveWinner(args() as EvalValue, byval wantMin as B
   dim elemIdx as Integer = -1
   dim sv as ScalarValue
   dim winnerSv as ScalarValue
-  dim winnerV as Double
+  dim winnerV as SmFloat
   dim hasWinner as Boolean = FALSE
   dim hasNonNanWinner as Boolean = FALSE
   dim itemCount as Integer = 0
   while ArgScalarValueWalkNext(args(), argIdx, elemIdx, sv)
     itemCount += 1
-    dim v as Double = ScalarNumericReal(sv)
+    dim v as SmFloat = ScalarNumericReal(sv)
     if IsNaNValue(v) then
       if hasNonNanWinner = FALSE andalso hasWinner = FALSE then
         winnerSv = sv
@@ -9066,7 +9435,7 @@ private function TryFoldExactComplexCartesian(args() as EvalValue, byval op as U
   return TRUE
 end function
 
-private function TryAvgExactComplexFromSum(byref sumV as EvalValue, byval itemCount as LongInt, byref outV as EvalValue) as Boolean
+private function TryAvgExactComplexFromSum(byref sumV as EvalValue, byval itemCount as SmInt, byref outV as EvalValue) as Boolean
   if itemCount <= 0 then return FALSE
   dim lRe as ExactCartesianComponent
   dim lIm as ExactCartesianComponent
@@ -9074,37 +9443,37 @@ private function TryAvgExactComplexFromSum(byref sumV as EvalValue, byval itemCo
   dim oIm as ExactCartesianComponent
   if TryExtractExactRealComponent(sumV.scalarValue, lRe) = FALSE then return FALSE
   if TryExtractExactImagComponent(sumV.scalarValue, lIm) = FALSE then return FALSE
-  dim reI as LongInt, imI as LongInt, qRe as LongInt, qIm as LongInt
-  if TryExactCartesianComponentToInt64(lRe, reI) = FALSE then return FALSE
-  if TryExactCartesianComponentToInt64(lIm, imI) = FALSE then return FALSE
-  if TryQuotExactInt64(reI, itemCount, qRe) = FALSE then return FALSE
-  if TryQuotExactInt64(imI, itemCount, qIm) = FALSE then return FALSE
-  ExactCartesianComponentAssignFromInt64(oRe, qRe)
-  ExactCartesianComponentAssignFromInt64(oIm, qIm)
+  dim reI as SmInt, imI as SmInt, qRe as SmInt, qIm as SmInt
+  if TryExactCartesianComponentToSmInt(lRe, reI) = FALSE then return FALSE
+  if TryExactCartesianComponentToSmInt(lIm, imI) = FALSE then return FALSE
+  if TryQuotExactSmInt(reI, itemCount, qRe) = FALSE then return FALSE
+  if TryQuotExactSmInt(imI, itemCount, qIm) = FALSE then return FALSE
+  ExactCartesianComponentAssignFromSmInt(oRe, qRe)
+  ExactCartesianComponentAssignFromSmInt(oIm, qIm)
   ValueSetScalarComplexFromExactCartesian(outV, oRe, oIm)
   return TRUE
 end function
 
-'' sum / min / max over exact integers. useUInt selects the uint64 walk; otherwise the signed walk.
+'' sum / min / max over exact integers. useUInt selects the SmUInt walk; otherwise the signed walk.
 '' Overflow returns FALSE so the caller can fall through to the float fold. Product is not this walk.
 private function TryAggFoldExactSumMinMax(args() as EvalValue, byval fnId as Integer, byval useUInt as Boolean, byref outV as EvalValue) as Boolean
   dim argIdx as Integer = lbound(args)
   dim elemIdx as Integer = -1
   dim sv as ScalarValue
-  dim accU as ULongInt = 0
-  dim accI as LongInt = 0
+  dim accU as SmUInt = 0
+  dim accI as SmInt = 0
   dim hasBest as Boolean = FALSE
-  dim bestU as ULongInt
-  dim bestI as LongInt
+  dim bestU as SmUInt
+  dim bestI as SmInt
   dim isSum as Boolean = (fnId = FUNC_SUM)
   dim wantMin as Boolean = (fnId = FUNC_MIN)
   while ArgScalarValueWalkNext(args(), argIdx, elemIdx, sv)
     if useUInt then
-      dim u2 as ULongInt
-      TryGetExactNonNegativeUInt64Scalar(sv, u2)
+      dim u2 as SmUInt
+      TryGetExactNonNegativeSmUIntScalar(sv, u2)
       if isSum then
-        dim nextU as ULongInt
-        if TryAddULongChecked(accU, u2, nextU) = FALSE then return FALSE
+        dim nextU as SmUInt
+        if TryAddSmUIntChecked(accU, u2, nextU) = FALSE then return FALSE
         accU = nextU
       elseif wantMin then
         if (hasBest = FALSE) orelse (u2 < bestU) then
@@ -9116,11 +9485,11 @@ private function TryAggFoldExactSumMinMax(args() as EvalValue, byval fnId as Int
         hasBest = TRUE
       end if
     else
-      dim i2 as LongInt
-      TryGetExactSignedInt64NoUIntWrapScalar(sv, i2)
+      dim i2 as SmInt
+      TryGetExactSignedIntNoSmUIntWrapScalar(sv, i2)
       if isSum then
-        dim nextI as LongInt
-        if TryAddInt64(accI, i2, nextI) = FALSE then return FALSE
+        dim nextI as SmInt
+        if TryAddSmInt(accI, i2, nextI) = FALSE then return FALSE
         accI = nextI
       elseif wantMin then
         if (hasBest = FALSE) orelse (i2 < bestI) then
@@ -9134,14 +9503,14 @@ private function TryAggFoldExactSumMinMax(args() as EvalValue, byval fnId as Int
     end if
   wend
   if isSum then
-    if useUInt then ValueSetUInt64(outV, accU) else ValueSetInt64(outV, accI)
+    if useUInt then ValueSetSmUInt(outV, accU) else ValueSetSmInt(outV, accI)
   else
-    if useUInt then ValueSetUInt64(outV, bestU) else ValueSetInt64(outV, bestI)
+    if useUInt then ValueSetSmUInt(outV, bestU) else ValueSetSmInt(outV, bestI)
   end if
   return TRUE
 end function
 
-'' sum / product / min / max: preserve exact uint64/int64 metadata when every operand carries exact integer state.
+'' sum / product / min / max: preserve exact SmUInt/SmInt metadata when every operand carries exact integer state.
 private function TryAggSimpleExactInteger(args() as EvalValue, byval fnId as Integer, byref outV as EvalValue) as Boolean
   dim argIdx as Integer = lbound(args)
   dim elemIdx as Integer = -1
@@ -9151,10 +9520,10 @@ private function TryAggSimpleExactInteger(args() as EvalValue, byval fnId as Int
   dim gotAny as Boolean = FALSE
   while ArgScalarValueWalkNext(args(), argIdx, elemIdx, sv)
     gotAny = TRUE
-    dim uProbe as ULongInt
-    dim liProbe as LongInt
-    dim nnU as Boolean = TryGetExactNonNegativeUInt64Scalar(sv, uProbe)
-    dim swI as Boolean = TryGetExactSignedInt64NoUIntWrapScalar(sv, liProbe)
+    dim uProbe as SmUInt
+    dim liProbe as SmInt
+    dim nnU as Boolean = TryGetExactNonNegativeSmUIntScalar(sv, uProbe)
+    dim swI as Boolean = TryGetExactSignedIntNoSmUIntWrapScalar(sv, liProbe)
     if (nnU = FALSE) andalso (swI = FALSE) then return FALSE
     if nnU = FALSE then allNnU = FALSE
     if swI = FALSE then allSwI = FALSE
@@ -9164,40 +9533,40 @@ private function TryAggSimpleExactInteger(args() as EvalValue, byval fnId as Int
   if fnId = FUNC_PRODUCT then
     argIdx = lbound(args)
     elemIdx = -1
-    dim productMag as ULongInt = 1
+    dim productMag as SmUInt = 1
     dim isNegativeProduct as Boolean = FALSE
     while ArgScalarValueWalkNext(args(), argIdx, elemIdx, sv)
-      dim termMag as ULongInt
-      if TryGetExactNonNegativeUInt64Scalar(sv, termMag) then
+      dim termMag as SmUInt
+      if TryGetExactNonNegativeSmUIntScalar(sv, termMag) then
         ' termMag already contains the unsigned magnitude.
       else
-        dim termI as LongInt
-        if TryGetExactSignedInt64NoUIntWrapScalar(sv, termI) = FALSE then return FALSE
+        dim termI as SmInt
+        if TryGetExactSignedIntNoSmUIntWrapScalar(sv, termI) = FALSE then return FALSE
         if termI < 0 then
           isNegativeProduct = not isNegativeProduct
-          if termI = FB_I64_MIN then
-            termMag = FB_I64_MIN_MAG_U
+          if termI = SM_INT_MIN then
+            termMag = SM_INT_MIN_MAG
           else
-            termMag = CULngInt(-termI)
+            termMag = SmCUInt(-termI)
           end if
         else
-          termMag = CULngInt(termI)
+          termMag = SmCUInt(termI)
         end if
       end if
 
-      dim nextMag as ULongInt
-      if TryMulULongChecked(productMag, termMag, nextMag) = FALSE then return FALSE
+      dim nextMag as SmUInt
+      if TryMulSmUIntChecked(productMag, termMag, nextMag) = FALSE then return FALSE
       productMag = nextMag
     wend
     if isNegativeProduct then
-      if productMag > FB_I64_MIN_MAG_U then return FALSE
-      if productMag = FB_I64_MIN_MAG_U then
-        ValueSetInt64(outV, FB_I64_MIN)
+      if productMag > SM_INT_MIN_MAG then return FALSE
+      if productMag = SM_INT_MIN_MAG then
+        ValueSetSmInt(outV, SM_INT_MIN)
       else
-        ValueSetInt64(outV, -CLngInt(productMag))
+        ValueSetSmInt(outV, -SmCInt(productMag))
       end if
     else
-      ValueSetUInt64(outV, productMag)
+      ValueSetSmUInt(outV, productMag)
     end if
     return TRUE
   end if
@@ -9525,7 +9894,7 @@ end sub
 private function ParseSyntaxCheckedBody(byref body as String, byref errText as String, byref bodyCol as Integer, byval suppressTailHint as Boolean) as Boolean
   dim savedStream as ZString ptr = pStream
   dim savedExprStart as ZString ptr = exprStart
-  dim savedParseError as Integer = parseError
+  dim savedParseError as Boolean = parseError
   dim savedWasPercentage as Boolean = wasPercentage
   dim savedBaseCol as Integer = errorBaseCol
   dim savedLastErr as String = lastErrorText
@@ -9542,7 +9911,7 @@ private function ParseSyntaxCheckedBody(byref body as String, byref errText as S
   pStream = strptr(body)
   exprStart = pStream
   errorBaseCol = 1
-  parseError = 0
+  parseError = FALSE
   syntaxCheckDepth = savedSyntaxDepth + 1
   iifDeferCallArity = 0
 
@@ -9618,12 +9987,12 @@ private function SyntaxCheckInlineLambdaBody(byref body as string, fnParams() as
   if len(msg) = 0 then msg = FB_STR_FAILED_TO_PARSE_USER_FUNCTION_BODY
   dim col as Integer = UnaryBodyErrorColumn(savedBodyCol, bodyCol, msg)
   lastErrorText = ""
-  parseError = 0
+  parseError = FALSE
   if col > 0 then
     SetParseErrorAtColumn(msg, col)
   else
     lastErrorText = msg
-    parseError = 1
+    parseError = TRUE
   end if
   return FALSE
 end function
@@ -9695,7 +10064,7 @@ private function TryParseLambdaAssignmentRhs(fnParams() as string, byref lamBody
 end function
 
 private function TryParseUnaryFunctionRefOnly(byref outV as EvalValue, byref expectsOne as String, byref expectsUnary as String) as Boolean
-  parseError = 0
+  parseError = FALSE
   SkipSpaces()
   if PeekRhsMayBeLambdaSyntaxAt(pStream) then
     SetParseErrorById(PARSE_ERR_UNEXPECTED_TOKEN)
@@ -9706,7 +10075,7 @@ end function
 
 private function TryParseUnaryLambdaOrFunctionRef(byref outV as EvalValue, byref expectsOne as String, byref expectsUnary as String) as Boolean
   dim save as ZString ptr = pStream
-  parseError = 0
+  parseError = FALSE
   SkipSpaces()
   dim fnParams() as string
   dim body as string = ""
@@ -9855,52 +10224,51 @@ private function InvokeUnaryFunctionOnElement(byref funcName as String, byref el
   return TRUE
 end function
 
-private sub ValueSetRationalReduced(byref outV as EvalValue, byval num as LongInt, byval den as ULongInt)
-  ValueSetScalar(outV, CDbl(num) / CDbl(den))
-  outV.scalarValue.exactInt64 = num
-  outV.scalarValue.exactUInt64 = den
-  ScalarSetExactInt64Valid(outV.scalarValue, TRUE)
-  ScalarSetExactUInt64Valid(outV.scalarValue, TRUE)
+private sub ValueSetRationalReduced(byref outV as EvalValue, byval num as SmInt, byval den as SmUInt)
+  ValueSetScalar(outV, SmCFloat(num) / SmCFloat(den))
+  outV.scalarValue.exactInt = num
+  outV.scalarValue.exactUInt = den
+  ScalarSetExactSmIntValid(outV.scalarValue, TRUE)
+  ScalarSetExactSmUIntValid(outV.scalarValue, TRUE)
   outV.scalarValue.flags or= SVF_RENDER_RATIONAL
   ScalarRepairExactMetadata(outV.scalarValue)
 end sub
 
-private function RatioApproxAbsNumerator(byval v as Double, byval p as LongInt, byval q as ULongInt) as Double
-  return abs(v * CDbl(q) - CDbl(p))
+private function RatioApproxAbsNumerator(byval v as SmFloat, byval p as SmInt, byval q as SmUInt) as SmFloat
+  return abs(v * SmCFloat(q) - SmCFloat(p))
 end function
 
-private function RatioApproxErrNumLess(byval n1 as Double, byval q1 as ULongInt, byval n2 as Double, byval q2 as ULongInt) as Boolean
-  return (n1 * CDbl(q2)) < (n2 * CDbl(q1))
+private function RatioApproxErrNumLess(byval n1 as SmFloat, byval q1 as SmUInt, byval n2 as SmFloat, byval q2 as SmUInt) as Boolean
+  return (n1 * SmCFloat(q2)) < (n2 * SmCFloat(q1))
 end function
 
-private function TryExactPower10Rational(byval v as Double, byref bestNum as LongInt, byref bestDen as ULongInt, byref bestAbsNum as Double) as Boolean
+private function TryExactPower10Rational(byval v as SmFloat, byref bestNum as SmInt, byref bestDen as SmUInt, byref bestAbsNum as SmFloat) as Boolean
   dim k as Integer
-  dim denPow as ULongInt
-  dim denPowLong as LongInt
-  dim scaled as Double
-  dim n as LongInt
-  dim nAbs as LongInt
-  dim scaleErr as Double
-  dim g as LongInt
-  dim candNum as LongInt
-  dim candDenLong as LongInt
-  dim candDen as ULongInt
-  dim candAbs as Double
+  dim denPow as SmUInt
+  dim denPowLong as SmInt
+  dim scaled as SmFloat
+  dim n as SmInt
+  dim nAbs as SmInt
+  dim scaleErr as SmFloat
+  dim g as SmInt
+  dim candNum as SmInt
+  dim candDenLong as SmInt
+  dim candDen as SmUInt
+  dim candAbs as SmFloat
   dim foundExact as Boolean = FALSE
   for k = 1 to RATIO_MAX_POWER10_EXP
-    denPow = Pow10U64(k)
-    scaled = v * CDbl(denPow)
-    n = clngint(round(scaled))
-    if n = 0 then continue for
+    denPow = Pow10SmUInt(k)
+    scaled = v * SmCFloat(denPow)
+    if TryRoundFloatToSmInt(scaled, n) = FALSE orelse n = 0 then continue for
     nAbs = abs(n)
     scaleErr = RATIO_APPROX_EPS * abs(scaled)
     if scaleErr < RATIO_APPROX_EPS then scaleErr = RATIO_APPROX_EPS
-    if abs(scaled - CDbl(n)) > scaleErr then continue for
-    denPowLong = CLngInt(denPow)
-    g = GcdInt64(nAbs, denPowLong)
+    if abs(scaled - SmCFloat(n)) > scaleErr then continue for
+    denPowLong = SmCInt(denPow)
+    g = GcdSmInt(nAbs, denPowLong)
     candNum = n \ g
     candDenLong = denPowLong \ g
-    candDen = CULngInt(candDenLong)
+    candDen = SmCUInt(candDenLong)
     candAbs = RatioApproxAbsNumerator(v, candNum, candDen)
     if RatioApproxErrNumLess(candAbs, candDen, bestAbsNum, bestDen) then
       bestAbsNum = candAbs
@@ -9912,9 +10280,9 @@ private function TryExactPower10Rational(byval v as Double, byref bestNum as Lon
   return foundExact
 end function
 
-private function RatioConsiderCandidate(byval v as Double, byval p as LongInt, byval q as ULongInt, byref bestNum as LongInt, byref bestDen as ULongInt, byref bestAbsNum as Double) as Boolean
-  if q = 0 orelse q > CULngInt(RATIO_MAX_DENOMINATOR) then return FALSE
-  dim absNum as Double = RatioApproxAbsNumerator(v, p, q)
+private function RatioConsiderCandidate(byval v as SmFloat, byval p as SmInt, byval q as SmUInt, byref bestNum as SmInt, byref bestDen as SmUInt, byref bestAbsNum as SmFloat) as Boolean
+  if q = 0 orelse q > SmCUInt(RATIO_MAX_DENOMINATOR) then return FALSE
+  dim absNum as SmFloat = RatioApproxAbsNumerator(v, p, q)
   if RatioApproxErrNumLess(absNum, q, bestAbsNum, bestDen) then
     bestAbsNum = absNum
     bestNum = p
@@ -9924,74 +10292,74 @@ private function RatioConsiderCandidate(byval v as Double, byval p as LongInt, b
   return FALSE
 end function
 
-private function RatioSemiconvergentAbsNumLess(byval v as Double, byval p1 as LongInt, byval q1 as LongInt, byval p0 as LongInt, byval q0 as LongInt, byval h1 as LongInt, byval h2 as LongInt) as Boolean
-  dim qh1 as LongInt = q1 + h1 * q0
-  dim qh2 as LongInt = q1 + h2 * q0
+private function RatioSemiconvergentAbsNumLess(byval v as SmFloat, byval p1 as SmInt, byval q1 as SmInt, byval p0 as SmInt, byval q0 as SmInt, byval h1 as SmInt, byval h2 as SmInt) as Boolean
+  dim qh1 as SmInt = q1 + h1 * q0
+  dim qh2 as SmInt = q1 + h2 * q0
   if qh1 <= 0 orelse qh2 <= 0 then return FALSE
-  dim ph1 as LongInt = p1 + h1 * p0
-  dim ph2 as LongInt = p1 + h2 * p0
-  dim n1 as Double = RatioApproxAbsNumerator(v, ph1, CULngInt(qh1))
-  dim n2 as Double = RatioApproxAbsNumerator(v, ph2, CULngInt(qh2))
-  return RatioApproxErrNumLess(n1, CULngInt(qh1), n2, CULngInt(qh2))
+  dim ph1 as SmInt = p1 + h1 * p0
+  dim ph2 as SmInt = p1 + h2 * p0
+  dim n1 as SmFloat = RatioApproxAbsNumerator(v, ph1, SmCUInt(qh1))
+  dim n2 as SmFloat = RatioApproxAbsNumerator(v, ph2, SmCUInt(qh2))
+  return RatioApproxErrNumLess(n1, SmCUInt(qh1), n2, SmCUInt(qh2))
 end function
 
-private function RatioScanSemiconvergentRange(byval v as Double, byval p1 as LongInt, byval q1 as LongInt, byval p0 as LongInt, byval q0 as LongInt, byval hMax as LongInt, byref bestNum as LongInt, byref bestDen as ULongInt, byref bestAbsNum as Double) as Boolean
+private function RatioScanSemiconvergentRange(byval v as SmFloat, byval p1 as SmInt, byval q1 as SmInt, byval p0 as SmInt, byval q0 as SmInt, byval hMax as SmInt, byref bestNum as SmInt, byref bestDen as SmUInt, byref bestAbsNum as SmFloat) as Boolean
   if hMax < 0 then return FALSE
   if hMax <= RATIO_SEMICONV_LINEAR_THRESH then
-    dim hLin as LongInt
+    dim hLin as SmInt
     for hLin = 0 to hMax
-      if RatioConsiderCandidate(v, p1 + hLin * p0, CULngInt(q1 + hLin * q0), bestNum, bestDen, bestAbsNum) then return TRUE
+      if RatioConsiderCandidate(v, p1 + hLin * p0, SmCUInt(q1 + hLin * q0), bestNum, bestDen, bestAbsNum) then return TRUE
     next hLin
     return FALSE
   end if
-  dim lo as LongInt = 0
-  dim hi as LongInt = hMax
-  if RatioConsiderCandidate(v, p1, CULngInt(q1), bestNum, bestDen, bestAbsNum) then return TRUE
+  dim lo as SmInt = 0
+  dim hi as SmInt = hMax
+  if RatioConsiderCandidate(v, p1, SmCUInt(q1), bestNum, bestDen, bestAbsNum) then return TRUE
   while hi - lo > 2
-    dim span as LongInt = hi - lo
-    dim m1 as LongInt = lo + span \ 3
-    dim m2 as LongInt = hi - span \ 3
+    dim span as SmInt = hi - lo
+    dim m1 as SmInt = lo + span \ 3
+    dim m2 as SmInt = hi - span \ 3
     if RatioSemiconvergentAbsNumLess(v, p1, q1, p0, q0, m1, m2) then
       hi = m2
     else
       lo = m1
     end if
   wend
-  dim hFin as LongInt
+  dim hFin as SmInt
   for hFin = lo to hi
-    if RatioConsiderCandidate(v, p1 + hFin * p0, CULngInt(q1 + hFin * q0), bestNum, bestDen, bestAbsNum) then return TRUE
+    if RatioConsiderCandidate(v, p1 + hFin * p0, SmCUInt(q1 + hFin * q0), bestNum, bestDen, bestAbsNum) then return TRUE
   next hFin
   return FALSE
 end function
 
-private function TryApproximateRational(byval x as Double, byref num as LongInt, byref den as ULongInt) as Boolean
+private function TryApproximateRational(byval x as SmFloat, byref num as SmInt, byref den as SmUInt) as Boolean
   if IsNaNValue(x) orelse IsInfValue(x) then return FALSE
   dim neg as Boolean = (x < 0.0)
-  dim v as Double = abs(x)
-  dim scale as Double = v
+  dim v as SmFloat = abs(x)
+  dim scale as SmFloat = v
   if scale < 1.0 then scale = 1.0
-  dim tol as Double = RATIO_APPROX_EPS * scale
+  dim tol as SmFloat = RATIO_APPROX_EPS * scale
   if v < tol then
     num = 0
     den = 1
     return TRUE
   end if
-  dim bestNum as LongInt = 0
-  dim bestDen as ULongInt = 1
-  dim bestAbsNum as Double = 1e300
-  dim p0 as LongInt = 0
-  dim p1 as LongInt = 1
-  dim q0 as LongInt = 1
-  dim q1 as LongInt = 0
-  dim cfVal as Double = v
+  dim bestNum as SmInt = 0
+  dim bestDen as SmUInt = 1
+  dim bestAbsNum as SmFloat = SM_HUGE_SENTINEL
+  dim p0 as SmInt = 0
+  dim p1 as SmInt = 1
+  dim q0 as SmInt = 1
+  dim q1 as SmInt = 0
+  dim cfVal as SmFloat = v
   dim i as Integer
-  dim a as LongInt
-  dim p as LongInt
-  dim q as LongInt
-  dim t as Double
-  dim hMax as LongInt
+  dim a as SmInt
+  dim p as SmInt
+  dim q as SmInt
+  dim t as SmFloat
+  dim hMax as SmInt
   dim cfDone as Boolean = FALSE
-  for i = 1 to 64
+  for i = 1 to RATIO_MAX_CF_TERMS
     a = fix(cfVal)
     p = a * p1 + p0
     q = a * q1 + q0
@@ -10002,11 +10370,11 @@ private function TryApproximateRational(byval x as Double, byref num as LongInt,
       end if
       exit for
     end if
-    if RatioConsiderCandidate(v, p, CULngInt(q), bestNum, bestDen, bestAbsNum) then
+    if RatioConsiderCandidate(v, p, SmCUInt(q), bestNum, bestDen, bestAbsNum) then
       cfDone = TRUE
       exit for
     end if
-    t = cfVal - CDbl(a)
+    t = cfVal - SmCFloat(a)
     if t <= RATIO_APPROX_EPS then exit for
     cfVal = 1.0 / t
     p0 = p1
@@ -10014,7 +10382,7 @@ private function TryApproximateRational(byval x as Double, byref num as LongInt,
     q0 = q1
     q1 = q
   next i
-  if v <= 1.0 / CDbl(RATIO_MAX_DENOMINATOR) then
+  if v <= 1.0 / SmCFloat(RATIO_MAX_DENOMINATOR) then
     TryExactPower10Rational(v, bestNum, bestDen, bestAbsNum)
   end if
   if bestNum = 0 then
@@ -10022,9 +10390,9 @@ private function TryApproximateRational(byval x as Double, byref num as LongInt,
     den = 1
     return TRUE
   end if
-  dim g as LongInt = GcdInt64(abs(bestNum), CLngInt(bestDen))
+  dim g as SmInt = GcdSmInt(abs(bestNum), SmCInt(bestDen))
   num = bestNum \ g
-  den = CULngInt(CLngInt(bestDen) \ g)
+  den = SmCUInt(SmCInt(bestDen) \ g)
   if neg then num = -num
   return TRUE
 end function
@@ -10034,7 +10402,7 @@ private function TryBuiltinRatioScalar(byref sv as ScalarValue, byref outV as Ev
     SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
     return TRUE
   end if
-  dim ar as Double, ai as Double
+  dim ar as SmFloat, ai as SmFloat
   ScalarLoadCartesian(sv, ar, ai)
   if IsNaNValue(ar) orelse IsNaNValue(ai) then
     if IsNaNValue(ar) then
@@ -10057,12 +10425,12 @@ private function TryBuiltinRatioScalar(byref sv as ScalarValue, byref outV as Ev
     end if
   end if
   if Parser_SupportComplexNumbers andalso ScalarHasNonzeroImaginaryPart(sv) then
-    dim numR as LongInt, denR as ULongInt
-    dim numI as LongInt, denI as ULongInt
+    dim numR as SmInt, denR as SmUInt
+    dim numI as SmInt, denI as SmUInt
     dim reC as ExactCartesianComponent
-    dim aiScale as Double = abs(ai)
+    dim aiScale as SmFloat = abs(ai)
     if aiScale < 1.0 then aiScale = 1.0
-    dim arScale as Double = abs(ar)
+    dim arScale as SmFloat = abs(ar)
     if arScale < 1.0 then arScale = 1.0
     outV.kind = VK_SCALAR
     outV.scalarValue = sv
@@ -10071,58 +10439,58 @@ private function TryBuiltinRatioScalar(byref sv as ScalarValue, byref outV as Ev
       return TRUE
     end if
     ScalarClearCartesianRenderExact(outV.scalarValue)
-    if ScalarImagExactInt64Valid(sv) andalso ScalarImagExactMetadataMatchesFloat(sv) then
-      ScalarApplyExactInt64Part(outV.scalarValue, TRUE, sv.imagExactInt64)
-    elseif abs(ai) >= RATIO_APPROX_EPS * aiScale andalso abs(ai) <= FB_MAX_EXACT_INT_FROM_DOUBLE then
+    if ScalarImagExactSmIntValid(sv) andalso ScalarImagExactMetadataMatchesFloat(sv) then
+      ScalarApplyExactSmIntPart(outV.scalarValue, TRUE, sv.imagExactInt)
+    elseif abs(ai) >= RATIO_APPROX_EPS * aiScale andalso abs(ai) <= SM_MAX_EXACT_INT_FROM_FLOAT then
       if TryApproximateRational(ai, numI, denI) = FALSE then
         SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
         return TRUE
       end if
       ScalarApplyReducedRationalPart(outV.scalarValue, TRUE, numI, denI)
     end if
-    if TryExtractExactRealComponent(sv, reC) andalso TryExactCartesianComponentToInt64(reC, numR) then
-      ScalarApplyExactInt64Part(outV.scalarValue, FALSE, numR)
-    elseif abs(ar) >= RATIO_APPROX_EPS * arScale andalso abs(ar) <= FB_MAX_EXACT_INT_FROM_DOUBLE then
+    if TryExtractExactRealComponent(sv, reC) andalso TryExactCartesianComponentToSmInt(reC, numR) then
+      ScalarApplyExactSmIntPart(outV.scalarValue, FALSE, numR)
+    elseif abs(ar) >= RATIO_APPROX_EPS * arScale andalso abs(ar) <= SM_MAX_EXACT_INT_FROM_FLOAT then
       if TryApproximateRational(ar, numR, denR) = FALSE then
         SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
         return TRUE
       end if
       ScalarApplyReducedRationalPart(outV.scalarValue, FALSE, numR, denR)
-    elseif sv.exactInt64Valid then
-      ScalarApplyExactInt64Part(outV.scalarValue, FALSE, sv.exactInt64)
+    elseif sv.exactIntValid then
+      ScalarApplyExactSmIntPart(outV.scalarValue, FALSE, sv.exactInt)
     end if
     return TRUE
   end if
-  if sv.exactInt64Valid then
-    ValueSetInt64(outV, sv.exactInt64)
+  if sv.exactIntValid then
+    ValueSetSmInt(outV, sv.exactInt)
     return TRUE
   end if
-  if sv.exactUInt64Valid then
-    ValueSetUInt64(outV, sv.exactUInt64)
+  if sv.exactUIntValid then
+    ValueSetSmUInt(outV, sv.exactUInt)
     return TRUE
   end if
-  dim arScale0 as Double = abs(ar)
+  dim arScale0 as SmFloat = abs(ar)
   if arScale0 < 1.0 then arScale0 = 1.0
   if abs(ar) < RATIO_APPROX_EPS * arScale0 then
     ValueSetScalar(outV, 0.0)
     return TRUE
   end if
-  dim nearInt as LongInt
-  if TryGetExactInt64FromDouble(ar, nearInt) then
-    ValueSetInt64(outV, nearInt)
+  dim nearInt as SmInt
+  if TryGetExactSmIntFromFloat(ar, nearInt) then
+    ValueSetSmInt(outV, nearInt)
     return TRUE
   end if
-  if abs(ar) > FB_MAX_EXACT_INT_FROM_DOUBLE then
+  if abs(ar) > SM_MAX_EXACT_INT_FROM_FLOAT then
     ValueSetScalar(outV, ar)
     return TRUE
   end if
-  dim num as LongInt, den as ULongInt
+  dim num as SmInt, den as SmUInt
   if TryApproximateRational(ar, num, den) = FALSE then
     SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
     return TRUE
   end if
   if den = 1 then
-    ValueSetInt64(outV, num)
+    ValueSetSmInt(outV, num)
   else
     ValueSetRationalReduced(outV, num, den)
   end if
@@ -10159,8 +10527,8 @@ end function
 
 private function CmpScalarsForSort(byref a as ScalarValue, byref b as ScalarValue, byval wantLess as Boolean) as Boolean
   if ScalarIsTime(a) orelse ScalarIsTime(b) then
-    dim am as LongInt
-    dim bm as LongInt
+    dim am as SmInt
+    dim bm as SmInt
     if ScalarIsTime(a) then
       am = TimeTotalMsFromScalarValue(a)
     elseif ScalarToSecondsMsForTimeOp(a, am) = FALSE then
@@ -10179,11 +10547,11 @@ private function CmpScalarsForSort(byref a as ScalarValue, byref b as ScalarValu
   if wantLess then
     if aNan then return (bNan = FALSE)
     if bNan then return FALSE
-    return a.scalar < b.scalar
+    return CmpRealScalars(a, b) < 0
   end if
   if bNan then return (aNan = FALSE)
   if aNan then return FALSE
-  return a.scalar > b.scalar
+  return CmpRealScalars(a, b) > 0
 end function
 
 private function ScalarSortLess(byref a as ScalarValue, byref b as ScalarValue) as Boolean
@@ -10200,27 +10568,59 @@ private function SortbyStableSortIndicesFromEvalKeys(sortKeys() as EvalValue, or
     orderIdx(i) = i
   next i
   if count <= 1 then return TRUE
-  dim j as Integer
-  dim cmpLess as Boolean
-  for i = 1 to count - 1
-    j = i
-    do while j > 0
-      dim cmp as Integer
-      if CompareEvalValuesEx(sortKeys(orderIdx(j)), sortKeys(orderIdx(j - 1)), cmp, TRUE) = FALSE then
-        SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
-        return FALSE
-      end if
-      cmpLess = (cmp < 0)
-      if cmpLess then
-        dim ts as Integer = orderIdx(j)
-        orderIdx(j) = orderIdx(j - 1)
-        orderIdx(j - 1) = ts
-        j -= 1
-      else
-        exit do
-      end if
+  '' Stable bottom-up merge sort (O(n log n) comparisons; the insertion sort it replaces was O(n^2)).
+  '' The right run element moves first only when it is strictly less, which keeps equal keys in input order.
+  dim mergeTmp() as Integer
+  redim mergeTmp(0 to count - 1)
+  dim runLen as Integer = 1
+  dim loIdx as Integer
+  dim midIdx as Integer
+  dim hiIdx as Integer
+  dim li as Integer
+  dim ri as Integer
+  dim k as Integer
+  dim cmp as Integer
+  do while runLen < count
+    loIdx = 0
+    do while loIdx < count
+      midIdx = loIdx + runLen
+      if midIdx > count then midIdx = count
+      hiIdx = loIdx + 2 * runLen
+      if hiIdx > count then hiIdx = count
+      li = loIdx
+      ri = midIdx
+      k = loIdx
+      do while li < midIdx andalso ri < hiIdx
+        if CompareEvalValuesEx(sortKeys(orderIdx(ri)), sortKeys(orderIdx(li)), cmp, TRUE) = FALSE then
+          SetParseErrorById(PARSE_ERR_INCOMPATIBLE_OPERANDS)
+          return FALSE
+        end if
+        if cmp < 0 then
+          mergeTmp(k) = orderIdx(ri)
+          ri += 1
+        else
+          mergeTmp(k) = orderIdx(li)
+          li += 1
+        end if
+        k += 1
+      loop
+      do while li < midIdx
+        mergeTmp(k) = orderIdx(li)
+        li += 1
+        k += 1
+      loop
+      do while ri < hiIdx
+        mergeTmp(k) = orderIdx(ri)
+        ri += 1
+        k += 1
+      loop
+      for i = loIdx to hiIdx - 1
+        orderIdx(i) = mergeTmp(i)
+      next i
+      loIdx = hiIdx
     loop
-  next i
+    runLen *= 2
+  loop
   return TRUE
 end function
 
@@ -10417,30 +10817,30 @@ private sub ReverseScalarValueArrayInPlace(a() as ScalarValue, byval count as In
 end sub
 
 ' Returns: 1 ok, 0 not an integer count (SetIntegerValuesError), -1 non-positive integer (SetPositiveIntegerError).
-private function TryGetRepeatCountArg(byref v as EvalValue, byref outN as LongInt) as Integer
+private function TryGetRepeatCountArg(byref v as EvalValue, byref outN as SmInt) as Integer
   if v.kind = VK_ARRAY then return 0
   if EvalValueInvolvesTime(v) then return 0
   if Parser_SupportComplexNumbers andalso EvalValueHasNonzeroImaginary(v) then return 0
-  dim n as LongInt
-  if TryGetExactInt64(v, n) = FALSE then return 0
+  dim n as SmInt
+  if TryGetExactSmInt(v, n) = FALSE then return 0
   if n <= 0 then return -1
   outN = n
   return 1
 end function
 
 ' Returns 1 when v is a scalar exact integer; 0 otherwise (integer-values error).
-private function TryGetRangeIntegerScalarArg(byref v as EvalValue, byref outN as LongInt) as Integer
+private function TryGetRangeIntegerScalarArg(byref v as EvalValue, byref outN as SmInt) as Integer
   if v.kind = VK_ARRAY then return 0
   if EvalValueInvolvesTime(v) then return 0
   if Parser_SupportComplexNumbers andalso EvalValueHasNonzeroImaginary(v) then return 0
-  if TryGetExactInt64(v, outN) = FALSE then return 0
+  if TryGetExactSmInt(v, outN) = FALSE then return 0
   return 1
 end function
 
 private function TryHandleBuiltinRange(byval fnId as Integer, byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
   if fnId <> FUNC_RANGE then return FALSE
 
-  dim startV as LongInt, stopV as LongInt, stepV as LongInt
+  dim startV as SmInt, stopV as SmInt, stepV as SmInt
   if TryGetRangeIntegerScalarArg(args(0), startV) = 0 then
     SetIntegerValuesError(fnName)
     return TRUE
@@ -10468,8 +10868,8 @@ private function TryHandleBuiltinRange(byval fnId as Integer, byref fnName as St
     return TRUE
   end if
 
-  dim estimated as ULongInt = EstimateRangeItemCount(startV, stopV, stepV)
-  if estimated = 0ull then
+  dim estimated as SmUInt = EstimateRangeItemCount(startV, stopV, stepV)
+  if estimated = SmCUInt(0) then
     ValueInitArrayLike(outV, 0, -1)
     return TRUE
   end if
@@ -10478,11 +10878,11 @@ private function TryHandleBuiltinRange(byval fnId as Integer, byref fnName as St
   dim count as Integer = CInt(estimated)
   dim vals() as ScalarValue
   redim vals(0 to count - 1)
-  dim cur as LongInt = startV
+  dim cur as SmInt = startV
   dim i as Integer
   for i = 0 to count - 1
     dim tmp as EvalValue
-    ValueSetInt64(tmp, cur)
+    ValueSetSmInt(tmp, cur)
     vals(i) = tmp.scalarValue
     if i < count - 1 then cur += stepV
   next i
@@ -10502,7 +10902,7 @@ private function TryHandleBuiltinRepeat(byval fnId as Integer, byref fnName as S
     return TRUE
   end if
 
-  dim n as LongInt
+  dim n as SmInt
   dim countStatus as Integer = TryGetRepeatCountArg(args(1), n)
   if countStatus = 0 then
     SetIntegerValuesError(fnName)
@@ -10516,8 +10916,8 @@ private function TryHandleBuiltinRepeat(byval fnId as Integer, byref fnName as S
     return TRUE
   end if
 
-  dim estimated as ULongInt
-  if TryMulULongChecked(CULngInt(c), CULngInt(n), estimated) = FALSE then
+  dim estimated as SmUInt
+  if TryMulSmUIntChecked(SmCUInt(c), SmCUInt(n), estimated) = FALSE then
     SetTooManyValuesError(fnName)
     return TRUE
   end if
@@ -10549,8 +10949,8 @@ end sub
 
 private function TryApplyFactorial(byref v as EvalValue, byref outV as EvalValue) as Boolean
   if v.kind = VK_ARRAY then return FALSE
-  dim n as LongInt
-  if TryGetExactInt64(v, n) = FALSE then return FALSE
+  dim n as SmInt
+  if TryGetExactSmInt(v, n) = FALSE then return FALSE
   return TryApplyFactorialScalarInt(n, outV)
 end function
 
@@ -10620,7 +11020,7 @@ private function CallArgsInvolveTime(args() as EvalValue) as Boolean
   return FALSE
 end function
 
-private function CollectRequiredArgsAsFlatTimeMs(args() as EvalValue, flat() as Double, byref fnName as String) as Integer
+private function CollectRequiredArgsAsFlatTimeMs(args() as EvalValue, flat() as SmFloat, byref fnName as String) as Integer
   dim argIdx as Integer = lbound(args)
   dim elemIdx as Integer = -1
   dim count as Integer = 0
@@ -10635,7 +11035,7 @@ private function CollectRequiredArgsAsFlatTimeMs(args() as EvalValue, flat() as 
     else
       redim preserve flat(0 to count)
     end if
-    flat(count) = CDbl(TimeTotalMsFromScalarValue(sv))
+    flat(count) = SmCFloat(TimeTotalMsFromScalarValue(sv))
     count += 1
   wend
   if count <= 0 then
@@ -10645,14 +11045,24 @@ private function CollectRequiredArgsAsFlatTimeMs(args() as EvalValue, flat() as 
   return count
 end function
 
-private function MedianFromDoubleFlatInPlace(a() as Double, byval c as Integer) as Double
+'' Midpoint of lower <= upper without overflow: opposite signs cannot overflow when added, same signs use the half distance.
+private function FloatMidpoint(byval lower as SmFloat, byval upper as SmFloat) as SmFloat
+  if (lower < 0) <> (upper < 0) then return (lower + upper) / 2
+  return lower + (upper - lower) / 2
+end function
+
+'' A NaN breaks the pivot scans below (they would run off the array), and the median of a set containing NaN is NaN.
+private function MedianFromFloatFlatInPlace(a() as SmFloat, byval c as Integer) as SmFloat
   dim midIdx as Integer = c \ 2
   dim leftIdx as Integer = 0
   dim rightIdx as Integer = c - 1
   dim kIdx as Integer = midIdx
   dim i as Integer
+  for i = 0 to c - 1
+    if IsNaNValue(a(i)) then return a(i)
+  next i
   do while leftIdx < rightIdx
-    dim pivot as Double = a((leftIdx + rightIdx) \ 2)
+    dim pivot as SmFloat = a((leftIdx + rightIdx) \ 2)
     i = leftIdx
     dim j as Integer = rightIdx
     do
@@ -10663,7 +11073,7 @@ private function MedianFromDoubleFlatInPlace(a() as Double, byval c as Integer) 
         j -= 1
       wend
       if i <= j then
-        SwapDouble(a(i), a(j))
+        SwapFloat(a(i), a(j))
         i += 1
         j -= 1
       end if
@@ -10676,15 +11086,15 @@ private function MedianFromDoubleFlatInPlace(a() as Double, byval c as Integer) 
       exit do
     end if
   loop
-  dim upper as Double = a(kIdx)
+  dim upper as SmFloat = a(kIdx)
   if (c and 1) = 1 then
     return upper
   end if
-  dim lower as Double = a(0)
+  dim lower as SmFloat = a(0)
   for i = 1 to midIdx - 1
     if a(i) > lower then lower = a(i)
   next i
-  return (lower + upper) / 2.0
+  return FloatMidpoint(lower, upper)
 end function
 
 
@@ -10714,6 +11124,104 @@ private function TryFinishEmptyAggregate(args() as EvalValue, byref fnName as St
   return FALSE
 end function
 
+'' Neumaier compensated step for sum/avg (comp is only applied when finite, so Inf/NaN follow the plain sum).
+private sub NeumaierAccumulate(byref sumV as SmFloat, byref comp as SmFloat, byval v as SmFloat)
+  dim t as SmFloat = sumV + v
+  dim d as SmFloat
+  if abs(sumV) >= abs(v) then
+    d = (sumV - t) + v
+  else
+    d = (v - t) + sumV
+  end if
+  comp += d
+  sumV = t
+end sub
+
+private function NeumaierResult(byval sumV as SmFloat, byval comp as SmFloat) as SmFloat
+  if comp <> 0.0 andalso abs(comp) <= SM_FLOAT_MAX then return sumV + comp
+  return sumV
+end function
+
+'' avg/mean of an exact integer sum: exact quotient when divisible, else correctly rounded float quotient.
+private function TryExactAvgFromIntegerSum(byref sumV as EvalValue, byval itemCount as Integer, byref outV as EvalValue) as Boolean
+  dim isNeg as Boolean
+  dim mag as SmUInt
+  if itemCount <= 0 then return FALSE
+  if TryGetExactSignMagnitudeScalar(sumV.scalarValue, isNeg, mag) = FALSE then return FALSE
+  dim d as SmUInt = SmCUInt(itemCount)
+  if (mag mod d) = SmCUInt(0) then
+    ValueSetFromSignMagnitude(outV, isNeg, mag \ d)
+  else
+    dim f as SmFloat = SmCFloat(mag) / SmCFloat(d)
+    if isNeg then f = -f
+    ValueSetScalarMaybeExact(outV, f)
+  end if
+  return TRUE
+end function
+
+'' Median when some item is at or beyond the exact-float range: sort exactly and take the exact middle.
+'' Returns FALSE (caller uses the float path) unless every item is an exact integer.
+private function TryMedianExactLargeIntegers(args() as EvalValue, byref outV as EvalValue) as Boolean
+  dim n as Integer = CountAggregateScalarValueItems(args())
+  if n <= 0 then return FALSE
+  dim vals(0 to n - 1) as ScalarValue
+  dim argIdx as Integer = lbound(args)
+  dim elemIdx as Integer = -1
+  dim sv as ScalarValue
+  dim i as Integer = 0
+  dim isNeg as Boolean
+  dim mag as SmUInt
+  while ArgScalarValueWalkNext(args(), argIdx, elemIdx, sv)
+    if TryGetExactSignMagnitudeScalar(sv, isNeg, mag) = FALSE then return FALSE
+    vals(i) = sv
+    i += 1
+  wend
+  SortScalarValueArray(vals())
+  dim hiIdx as Integer = n \ 2
+  if (n mod 2) = 1 then
+    EvalScalarFromScalarValue(vals(hiIdx), outV)
+    return TRUE
+  end if
+  dim loNeg as Boolean, hiNeg as Boolean
+  dim loMag as SmUInt, hiMag as SmUInt
+  TryGetExactSignMagnitudeScalar(vals(hiIdx - 1), loNeg, loMag)
+  TryGetExactSignMagnitudeScalar(vals(hiIdx), hiNeg, hiMag)
+  dim midNeg as Boolean
+  dim midMag as SmUInt
+  dim odd as Boolean
+  if loNeg = hiNeg then
+    ' Same sign: the middle lies between the magnitudes, so no overflow.
+    dim nearMag as SmUInt
+    dim farMag as SmUInt
+    if loNeg then
+      nearMag = hiMag
+      farMag = loMag
+    else
+      nearMag = loMag
+      farMag = hiMag
+    end if
+    midNeg = loNeg
+    midMag = nearMag + ((farMag - nearMag) \ SmCUInt(2))
+    odd = (((farMag - nearMag) and SmCUInt(1)) <> SmCUInt(0))
+  elseif hiMag >= loMag then
+    midNeg = FALSE
+    midMag = (hiMag - loMag) \ SmCUInt(2)
+    odd = (((hiMag - loMag) and SmCUInt(1)) <> SmCUInt(0))
+  else
+    midNeg = TRUE
+    midMag = (loMag - hiMag) \ SmCUInt(2)
+    odd = (((loMag - hiMag) and SmCUInt(1)) <> SmCUInt(0))
+  end if
+  if odd then
+    dim f as SmFloat = SmCFloat(midMag) + 0.5
+    if midNeg then f = -f
+    ValueSetScalar(outV, f)
+  else
+    ValueSetFromSignMagnitude(outV, midNeg, midMag)
+  end if
+  return TRUE
+end function
+
 private function TryAggregateFoldByMode(byval mode as AggregateFoldMode, byval fnId as Integer, byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
   if TryFinishEmptyAggregate(args(), fnName, outV) then return TRUE
   select case mode
@@ -10736,15 +11244,15 @@ private function TryAggregateFoldByMode(byval mode as AggregateFoldMode, byval f
   if TryFoldExactComplexCartesian(args(), foldOp, outV) then
     if (fnId = FUNC_AVG) orelse (fnId = FUNC_MEAN) then
       dim avgV as EvalValue
-      if TryAvgExactComplexFromSum(outV, CLngInt(itemCountCx), avgV) then
+      if TryAvgExactComplexFromSum(outV, SmCInt(itemCountCx), avgV) then
         outV = avgV
       else
-        dim arCx as Double
-        dim aiCx as Double
+        dim arCx as SmFloat
+        dim aiCx as SmFloat
         ScalarLoadCartesian(outV.scalarValue, arCx, aiCx)
-        arCx /= CDbl(itemCountCx)
-        aiCx /= CDbl(itemCountCx)
-        ValueSetScalarComplexFromDoubles(outV, arCx, aiCx)
+        arCx /= SmCFloat(itemCountCx)
+        aiCx /= SmCFloat(itemCountCx)
+        ValueSetScalarComplexFromFloats(outV, arCx, aiCx)
       end if
     end if
     return TRUE
@@ -10752,10 +11260,10 @@ private function TryAggregateFoldByMode(byval mode as AggregateFoldMode, byval f
   dim argIdxCx as Integer = lbound(args)
   dim elemIdxCx as Integer = -1
   dim svCx as ScalarValue
-  dim arCx as Double
-  dim aiCx as Double
-  dim brCx as Double
-  dim biCx as Double
+  dim arCx as SmFloat
+  dim aiCx as SmFloat
+  dim brCx as SmFloat
+  dim biCx as SmFloat
   if fnId = FUNC_PRODUCT then
     arCx = 1.0
     aiCx = 0.0
@@ -10774,29 +11282,29 @@ private function TryAggregateFoldByMode(byval mode as AggregateFoldMode, byval f
     end if
   wend
   if (fnId = FUNC_AVG) orelse (fnId = FUNC_MEAN) then
-    arCx /= CDbl(itemCountCx)
-    aiCx /= CDbl(itemCountCx)
+    arCx /= SmCFloat(itemCountCx)
+    aiCx /= SmCFloat(itemCountCx)
   end if
-  ValueSetScalarComplexFromDoubles(outV, arCx, aiCx)
+  ValueSetScalarComplexFromFloats(outV, arCx, aiCx)
   return TRUE
   case AFM_TIME
   if fnId = FUNC_MEDIAN then
-    dim flatMed() as Double
+    dim flatMed() as SmFloat
     dim cM as Integer = CollectRequiredArgsAsFlatTimeMs(args(), flatMed(), fnName)
     if cM < 0 then return TRUE
     if cM = 1 then
-      ValueSetTimeMs(outV, RoundHalfUpDoubleToLongInt(flatMed(0)))
+      ValueSetTimeMs(outV, RoundHalfUpFloatToSmInt(flatMed(0)))
       return TRUE
     end if
-    dim med as Double = MedianFromDoubleFlatInPlace(flatMed(), cM)
-    ValueSetTimeMs(outV, RoundHalfUpDoubleToLongInt(med))
+    dim med as SmFloat = MedianFromFloatFlatInPlace(flatMed(), cM)
+    ValueSetTimeMs(outV, RoundHalfUpFloatToSmInt(med))
     return TRUE
   end if
 
   dim argIdx as Integer = lbound(args)
   dim elemIdx as Integer = -1
   dim sv as ScalarValue
-  dim accMs as LongInt = 0
+  dim accMs as SmInt = 0
   dim accInit as Boolean = FALSE
   dim itemCount as Integer = 0
   while ArgScalarValueWalkNext(args(), argIdx, elemIdx, sv)
@@ -10804,7 +11312,7 @@ private function TryAggregateFoldByMode(byval mode as AggregateFoldMode, byval f
       SetTimeArrayMixedError(fnName & FB_STR_PAR)
       return TRUE
     end if
-    dim curMs as LongInt = TimeTotalMsFromScalarValue(sv)
+    dim curMs as SmInt = TimeTotalMsFromScalarValue(sv)
     if fnId = FUNC_MIN then
       if accInit = FALSE orelse curMs < accMs then accMs = curMs
       accInit = TRUE
@@ -10824,15 +11332,15 @@ private function TryAggregateFoldByMode(byval mode as AggregateFoldMode, byval f
     return TRUE
   end if
   if (fnId = FUNC_AVG) orelse (fnId = FUNC_MEAN) then
-    dim avgD as Double = CDbl(accMs) / CDbl(itemCount)
-    ValueSetTimeMs(outV, RoundHalfUpDoubleToLongInt(avgD))
+    dim avgD as SmFloat = SmCFloat(accMs) / SmCFloat(itemCount)
+    ValueSetTimeMs(outV, RoundHalfUpFloatToSmInt(avgD))
     return TRUE
   end if
   ValueSetTimeMs(outV, accMs)
   return TRUE
   case AFM_REAL
   dim c as Integer
-  dim flat() as Double
+  dim flat() as SmFloat
   dim isAggSimple as Boolean = (fnId = FUNC_SUM) orelse (fnId = FUNC_PRODUCT) orelse (fnId = FUNC_MIN) orelse (fnId = FUNC_MAX) orelse (fnId = FUNC_AVG) orelse (fnId = FUNC_MEAN)
   if ubound(args) = 0 andalso args(0).kind = VK_SCALAR then
     if isAggSimple then
@@ -10841,7 +11349,7 @@ private function TryAggregateFoldByMode(byval mode as AggregateFoldMode, byval f
     end if
   end if
 
-  dim acc as Double = 0
+  dim acc as SmFloat = 0
   dim i as Integer
 
   if isAggSimple then
@@ -10856,22 +11364,30 @@ private function TryAggregateFoldByMode(byval mode as AggregateFoldMode, byval f
       end if
       return TRUE
     end if
+    if (fnId = FUNC_AVG) orelse (fnId = FUNC_MEAN) then
+      dim sumExact as EvalValue
+      if TryAggSimpleExactInteger(args(), FUNC_SUM, sumExact) then
+        if TryExactAvgFromIntegerSum(sumExact, CountAggregateScalarValueItems(args()), outV) then return TRUE
+      end if
+    end if
     dim itemCount as Integer = 0
     dim argIdx as Integer = lbound(args)
     dim elemIdx as Integer = -1
-    dim v as Double
+    dim v as SmFloat
+    dim accComp as SmFloat = 0
     while ArgScalarWalkNext(args(), argIdx, elemIdx, v)
       if fnId = FUNC_PRODUCT then
         ' A later 0 or sign change still applies after Inf (Inf*0 is NaN).
         acc *= v
       else
-        acc += v
+        NeumaierAccumulate(acc, accComp, v)
       end if
       itemCount += 1
     wend
     if itemCount <= 0 then SetAtLeastOneArgError(fnName): return TRUE
+    if fnId <> FUNC_PRODUCT then acc = NeumaierResult(acc, accComp)
     if (fnId = FUNC_AVG) orelse (fnId = FUNC_MEAN) then acc /= itemCount
-    ValueSetScalar(outV, acc)
+    ValueSetScalarMaybeExact(outV, acc)
     return TRUE
   end if
 
@@ -10890,23 +11406,33 @@ private function TryAggregateFoldByMode(byval mode as AggregateFoldMode, byval f
     end if
     c = CollectRequiredArgsAsFlat(args(), flat(), fnName)
     if c <= 0 then return TRUE
-    acc = MedianFromDoubleFlatInPlace(flat(), c)
+    dim hasLargeMag as Boolean = FALSE
+    for i = 0 to c - 1
+      if abs(flat(i)) >= SM_MAX_EXACT_INT_FROM_FLOAT then
+        hasLargeMag = TRUE
+        exit for
+      end if
+    next i
+    if hasLargeMag then
+      if TryMedianExactLargeIntegers(args(), outV) then return TRUE
+    end if
+    acc = MedianFromFloatFlatInPlace(flat(), c)
     ValueSetScalar(outV, acc)
     return TRUE
   end if
 
   if (fnId = FUNC_VARIANCE) orelse (fnId = FUNC_STDDEV) then
-    dim meanVal as Double = 0
-    dim m2 as Double = 0
+    dim meanVal as SmFloat = 0
+    dim m2 as SmFloat = 0
     dim n as Integer = 0
     dim argIdxVar as Integer = lbound(args)
     dim elemIdxVar as Integer = -1
-    dim vVar as Double
+    dim vVar as SmFloat
     while ArgScalarWalkNext(args(), argIdxVar, elemIdxVar, vVar)
       n += 1
-      dim delta as Double = vVar - meanVal
+      dim delta as SmFloat = vVar - meanVal
       meanVal += delta / n
-      dim delta2 as Double = vVar - meanVal
+      dim delta2 as SmFloat = vVar - meanVal
       m2 += delta * delta2
     wend
     if n <= 0 then SetAtLeastOneArgError(fnName): return TRUE
@@ -11042,12 +11568,13 @@ private function TryBuiltinDispatchWithTime(byval fnId as Integer, byref fnName 
 end function
 
 private function TryBuiltinUniqueScalars(uniqueVals() as ScalarValue, byval c as Integer, byref outV as EvalValue) as Boolean
-  dim tmp() as ScalarValue, keys() as ULongInt, used() as UByte
+  dim tmp() as ScalarValue, keys() as SmUInt, used() as UByte, slotOf() as Integer
   redim tmp(0 to c - 1)
   dim cap as Integer = NextPow2AtLeast(c * 2)
   if cap < 4 then cap = 4
   redim keys(0 to cap - 1)
   redim used(0 to cap - 1)
+  redim slotOf(0 to cap - 1)
   dim outCount as Integer = 0
   dim i as Integer
   dim seenNan as Boolean = FALSE
@@ -11071,41 +11598,39 @@ private function TryBuiltinUniqueScalars(uniqueVals() as ScalarValue, byval c as
       continue for
     end if
     dim seen as Boolean = FALSE
+    dim v as SmFloat = uniqueVals(i).scalar
+    dim key as SmUInt
     if useComplexUnique then
-      dim j as Integer
-      for j = 0 to outCount - 1
-        if ScalarValuesEqualForCompare(uniqueVals(i), tmp(j)) then
-          seen = TRUE
-          exit for
-        end if
-      next j
-      if seen = FALSE then
-        tmp(outCount) = uniqueVals(i)
-        outCount += 1
-      end if
+      dim rePart as SmFloat = v
+      dim imPart as SmFloat = uniqueVals(i).imag
+      if rePart = 0 then rePart = 0
+      if imPart = 0 then imPart = 0
+      key = UniqueHashKeyFromCartesian(rePart, imPart)
+    elseif ScalarIsTime(uniqueVals(i)) then
+      key = UniqueHashKeyFromFloat(SmCFloat(TimeTotalMsFromScalarValue(uniqueVals(i))))
     else
-      dim v as Double = uniqueVals(i).scalar
-      dim key as ULongInt
-      if ScalarIsTime(uniqueVals(i)) then
-        key = UniqueHashKeyFromDouble(CDbl(TimeTotalMsFromScalarValue(uniqueVals(i))))
-      else
-        key = UniqueHashKeyFromDouble(v)
-      end if
-      dim idx as Integer = CInt(key and CULngInt(cap - 1))
-      do
-        if used(idx) = 0 then exit do
-        if keys(idx) = key then
+      key = UniqueHashKeyFromFloat(v)
+    end if
+    dim smallKey as Boolean = (useComplexUnique = FALSE) andalso (abs(v) < SM_MAX_EXACT_INT_FROM_FLOAT)
+    dim idx as Integer = CInt(key and SmCUInt(cap - 1))
+    do
+      if used(idx) = 0 then exit do
+      if keys(idx) = key then
+        ' Distinct exact integers above 2^mantissa can share one float key: confirm with the exact compare.
+        if smallKey orelse ScalarIsTime(uniqueVals(i)) orelse ScalarIsTime(tmp(slotOf(idx))) orelse _
+           ScalarValuesEqualForCompare(uniqueVals(i), tmp(slotOf(idx))) then
           seen = TRUE
           exit do
         end if
-        idx = (idx + 1) and (cap - 1)
-      loop
-      if seen = FALSE then
-        used(idx) = 1
-        keys(idx) = key
-        tmp(outCount) = uniqueVals(i)
-        outCount += 1
       end if
+      idx = (idx + 1) and (cap - 1)
+    loop
+    if seen = FALSE then
+      used(idx) = 1
+      keys(idx) = key
+      slotOf(idx) = outCount
+      tmp(outCount) = uniqueVals(i)
+      outCount += 1
     end if
   next i
   redim preserve tmp(0 to outCount - 1)
@@ -11157,7 +11682,7 @@ private function TryHandleBuiltinArrayTransform(byval fnId as Integer, byref fnN
       if prep = -1 orelse prep = 1 then return TRUE
       return TryBuiltinUniqueScalars(vals(), c, outV)
     case FUNC_LEN
-      ValueSetInt64(outV, CountFlattenedArgs(args()))
+      ValueSetSmInt(outV, CountFlattenedArgs(args()))
       return TRUE
     case else
       return FALSE
@@ -11167,27 +11692,27 @@ end function
 private function TryHandleBuiltinScalarBinary(byval fnId as Integer, byref fnName as String, args() as EvalValue, byref outV as EvalValue) as Boolean
   select case fnId
     case FUNC_LOG
-      if TryBuiltinMapBinaryTwoArgCore(args(), fnName, FUNC_LOG, FALSE, outV) = FALSE andalso parseError = 0 then
+      if TryBuiltinMapBinaryTwoArgCore(args(), fnName, FUNC_LOG, FALSE, outV) = FALSE andalso parseError = FALSE then
         SetBinaryBuiltinBroadcastFailure(fnName, args(0), args(1), 2)
       end if
       return TRUE
     case FUNC_ATAN2
-      if TryBuiltinMapBinaryTwoArgCore(args(), fnName, FUNC_ATAN2, TRUE, outV) = FALSE andalso parseError = 0 then
+      if TryBuiltinMapBinaryTwoArgCore(args(), fnName, FUNC_ATAN2, TRUE, outV) = FALSE andalso parseError = FALSE then
         SetBinaryBuiltinBroadcastFailure(fnName, args(0), args(1), 2)
       end if
       return TRUE
     case FUNC_HYPOT
-      if TryBuiltinMapBinaryTwoArgCore(args(), fnName, FUNC_HYPOT, FALSE, outV) = FALSE andalso parseError = 0 then
+      if TryBuiltinMapBinaryTwoArgCore(args(), fnName, FUNC_HYPOT, FALSE, outV) = FALSE andalso parseError = FALSE then
         SetBinaryBuiltinBroadcastFailure(fnName, args(0), args(1), 2)
       end if
       return TRUE
     case FUNC_MOD
-      if ValueApplyBinaryInt64(args(0), args(1), OP_BIT_MOD, outV) = FALSE andalso parseError = 0 then
+      if ValueApplyBinarySmInt(args(0), args(1), OP_BIT_MOD, outV) = FALSE andalso parseError = FALSE then
         SetBinaryBuiltinBroadcastFailure(fnName, args(0), args(1), 2)
       end if
       return TRUE
     case FUNC_POW
-      if ValueApplyBinary(args(0), args(1), CHAR_CARET, outV) = FALSE andalso parseError = 0 then
+      if ValueApplyBinary(args(0), args(1), CHAR_CARET, outV) = FALSE andalso parseError = FALSE then
         SetBinaryBuiltinBroadcastFailure(fnName, args(0), args(1), 2)
       end if
       return TRUE
@@ -11198,8 +11723,8 @@ end function
 
 private function ScalarIsNegativeIntegerFact(byref s as ScalarValue) as Boolean
   if ScalarHasNonzeroImaginaryPart(s) then return FALSE
-  dim n as LongInt
-  if TryGetExactInt64Scalar(s, n) = FALSE then return FALSE
+  dim n as SmInt
+  if TryGetExactSmIntScalar(s, n) = FALSE then return FALSE
   return n < 0
 end function
 
@@ -11244,7 +11769,17 @@ private function TryHandleBuiltinSpecialScalars(byval fnId as Integer, byref fn 
         SetScalarValuesError(fnName)
         return TRUE
       end if
-      if TryApplyFactorint(args(0), outV) = FALSE then SetIntegerValuesError(fnName)
+      dim factorintTooWide as Boolean
+      dim factorintUnfactorable as Boolean
+      if TryApplyFactorint(args(0), outV, factorintTooWide, factorintUnfactorable) = FALSE then
+        if factorintTooWide then
+          SetParseError(fnName & FB_STR_INPUT_LIMITED_TO_64_BITS)
+        elseif factorintUnfactorable then
+          SetParseError(fnName & FB_STR_FACTORINT_UNABLE_TO_FACTOR)
+        else
+          SetIntegerValuesError(fnName)
+        end if
+      end if
       return TRUE
     case FUNC_RAND
       ValueSetScalar(outV, rnd)
@@ -11370,7 +11905,7 @@ end sub
 '' While syntaxCheckDepth > 0, calls are parsed for shape and arity only.
 private function ParseCallInIifSyntaxCheck(byref fnName as String) as EvalValue
   dim outV as EvalValue
-  ValueSetInt64(outV, 0)
+  ValueSetSmInt(outV, 0)
   dim args() as EvalValue
   dim argsCount as Integer = 0
   dim argsCap as Integer = 0
@@ -11427,7 +11962,7 @@ end function
 '' Only the selected branch is evaluated.
 private function ParseIifCall() as EvalValue
   dim outV as EvalValue
-  ValueSetInt64(outV, 0)
+  ValueSetSmInt(outV, 0)
   if syntaxCheckDepth > 0 then
     dim nested() as ZString ptr
     dim nestedCount as Integer = 0
@@ -11508,7 +12043,7 @@ end function
 '' Syntax-check validates the name and the written arity. unpack expansion is checked on the real call.
 private function ParseIsInstanceCall() as EvalValue
   dim outV as EvalValue
-  ValueSetInt64(outV, 0)
+  ValueSetSmInt(outV, 0)
   dim fnName as String = GetFunctionName(FUNC_ISINSTANCE)
   SkipSpaces()
   if pStream[0] = CHAR_RPAREN then
@@ -11577,9 +12112,9 @@ private function ParseIsInstanceCall() as EvalValue
     end if
   end if
   if ValueIsInstanceOfType(valueV, typeTok) then
-    ValueSetInt64(outV, 1)
+    ValueSetSmInt(outV, 1)
   else
-    ValueSetInt64(outV, 0)
+    ValueSetSmInt(outV, 0)
   end if
   return outV
 end function
@@ -11631,7 +12166,7 @@ private function ParseFunctionCall(byref fnName as String) as EvalValue
         if TryDispatchBuiltinCall(fnId, fnName, args(), outV) = FALSE then
           if EvaluateUserFunction(fnName, args(), outV) = FALSE then
             AppendUniqueName(unknownFuncsText, fnName)
-            ValueSetInt64(outV, 0)
+            ValueSetSmInt(outV, 0)
           end if
         end if
       end if
@@ -11641,16 +12176,16 @@ private function ParseFunctionCall(byref fnName as String) as EvalValue
 end function
 
 private function ParseScalarNumericValue(byref n as EvalValue) as Boolean
-  dim dVal as Double = 0
+  dim dVal as SmFloat = 0
   dim keepExactInt as Boolean = FALSE
-  dim keepInt as LongInt = 0
+  dim keepInt as SmInt = 0
   dim keepExactUInt as Boolean = FALSE
-  dim keepUInt as ULongInt = 0
+  dim keepUInt as SmUInt = 0
   dim numIntDigits as Integer = 0
 
   if IsDecimalRadixPrefixedAt(pStream) then
     dim prefixLower as UByte = 0
-    dim radix as ULongInt = 0
+    dim radix as SmUInt = 0
     if pStream[1] = CHAR_LC_X orelse pStream[1] = CHAR_X then
       prefixLower = CHAR_LC_X
       radix = 16
@@ -11662,48 +12197,46 @@ private function ParseScalarNumericValue(byref n as EvalValue) as Boolean
       radix = 8
     end if
     if prefixLower <> 0 then
-      if TryParsePrefixedUIntLiteral(prefixLower, radix, keepUInt) = FALSE then
+      if TryParsePrefixedSmUIntLiteral(prefixLower, radix, keepUInt) = FALSE then
         SetInvalidPrefixedLiteralError(prefixLower)
         return FALSE
       end if
 
-      dVal = CDbl(keepUInt)
+      dVal = SmCFloat(keepUInt)
       keepExactUInt = TRUE
-      if keepUInt <= FB_I64_MAX_U then
+      if keepUInt <= SM_INT_MAX_U then
         keepExactInt = TRUE
-        keepInt = CLngInt(keepUInt)
+        keepInt = SmCInt(keepUInt)
       end if
     end if
   end if
 
   if keepExactUInt = FALSE then
-    ' Decimal: single pass accumulates float + optional exact uint64 metadata.
+    ' Decimal: single pass accumulates float + optional exact SmUInt metadata.
     dim litStart as ZString ptr = pStream
-    dim fract as Double = 1
-    dim decIntAcc as ULongInt = 0
-    dim decFracAcc as ULongInt = 0
+    dim decIntAcc as SmUInt = 0
+    dim decFracAcc as SmUInt = 0
     dim numFracDigits as Integer = 0
     dim decIntOverflow as Boolean = FALSE
     dim intPartStarted as Boolean = FALSE
     dim hasDigit as Boolean = FALSE
-    const U64_MAX_DIV10 as ULongInt = (FB_U64_MAX \ 10ull)
-    const U64_MAX_MOD10 as Integer = CInt(FB_U64_MAX mod 10ull)
+    const SMUINT_MAX_DIV10 as SmUInt = (SM_UINT_MAX \ SmCUInt(10))
+    const SMUINT_MAX_MOD10 as Integer = CInt(SM_UINT_MAX mod SmCUInt(10))
 
     ' Parse integer part, skip leading zeros
     while pStream[0] >= CHAR_DIGIT_0 andalso pStream[0] <= CHAR_DIGIT_9
       dim digit as Integer = (pStream[0] - CHAR_DIGIT_0)
-      dVal = dVal * 10 + digit
       hasDigit = TRUE
       if digit <> 0 then
         intPartStarted = TRUE
       end if
       if intPartStarted then
         if not decIntOverflow then
-          if (decIntAcc > U64_MAX_DIV10) orelse (decIntAcc = U64_MAX_DIV10 andalso digit > U64_MAX_MOD10) then
+          if (decIntAcc > SMUINT_MAX_DIV10) orelse (decIntAcc = SMUINT_MAX_DIV10 andalso digit > SMUINT_MAX_MOD10) then
             decIntOverflow = TRUE
             decIntAcc = 0
           else
-            decIntAcc = quickMult10(decIntAcc) + CULngInt(digit)
+            decIntAcc = quickMult10(decIntAcc) + SmCUInt(digit)
           end if
         end if
         numIntDigits += 1
@@ -11718,14 +12251,12 @@ private function ParseScalarNumericValue(byref n as EvalValue) as Boolean
       while pStream[0] >= CHAR_DIGIT_0 andalso pStream[0] <= CHAR_DIGIT_9
         dim digit as Integer = (pStream[0] - CHAR_DIGIT_0)
         hasDigit = TRUE
-        fract /= 10
-        dVal += digit * fract
         if not decIntOverflow then
-          if (decFracAcc > U64_MAX_DIV10) orelse (decFracAcc = U64_MAX_DIV10 andalso digit > U64_MAX_MOD10) then
+          if (decFracAcc > SMUINT_MAX_DIV10) orelse (decFracAcc = SMUINT_MAX_DIV10 andalso digit > SMUINT_MAX_MOD10) then
             decIntOverflow = TRUE
             decFracAcc = 0
           else
-            decFracAcc = quickMult10(decFracAcc) + CULngInt(digit)
+            decFracAcc = quickMult10(decFracAcc) + SmCUInt(digit)
           end if
         end if
         numFracDigits += 1
@@ -11787,30 +12318,30 @@ private function ParseScalarNumericValue(byref n as EvalValue) as Boolean
       if adjust >= 0 then
         ' Positive adjustment: combine int and frac parts, then scale
         dim significantDigits as Integer = numIntDigits + numFracDigits
-        if significantDigits + adjust > 20 then
-          ' Result would exceed uint64 range
+        if significantDigits + adjust > SM_UINT_DIGITS10 then
+          ' Result would exceed SmUInt range
           decIntOverflow = TRUE
         elseif numFracDigits = 0 andalso adjust = 0 then
           ' Pure decimal integer without exponent: mantissa already in decIntAcc (skip mult/add no-ops)
-          dVal = CDbl(decIntAcc)
+          dVal = SmCFloat(decIntAcc)
           keepExactUInt = TRUE
           keepUInt = decIntAcc
           exactIntLiteral = TRUE
         else
           ' Combine: intPart * 10^fracDigits + fracPart (checked: silent ULongInt wrap must not attach exact uint metadata)
-          dim exactInt as ULongInt = decIntAcc
-          if TryMult10_N_TimesImpl(exactInt, numFracDigits, exactInt) = FALSE then
+          dim exactDecUInt as SmUInt = decIntAcc
+          if TryMult10_N_TimesImpl(exactDecUInt, numFracDigits, exactDecUInt) = FALSE then
             decIntOverflow = TRUE
-          elseif TryAddULongChecked(exactInt, decFracAcc, exactInt) = FALSE then
+          elseif TryAddSmUIntChecked(exactDecUInt, decFracAcc, exactDecUInt) = FALSE then
             decIntOverflow = TRUE
           elseif adjust > 0 then
-            if TryMult10_N_TimesImpl(exactInt, adjust, exactInt) = FALSE then decIntOverflow = TRUE
+            if TryMult10_N_TimesImpl(exactDecUInt, adjust, exactDecUInt) = FALSE then decIntOverflow = TRUE
           end if
 
           if decIntOverflow = FALSE then
-            decIntAcc = exactInt
+            decIntAcc = exactDecUInt
             numFracDigits = 0
-            dVal = CDbl(exactInt)
+            dVal = SmCFloat(exactDecUInt)
             keepExactUInt = TRUE
             keepUInt = decIntAcc
             exactIntLiteral = TRUE
@@ -11820,25 +12351,25 @@ private function ParseScalarNumericValue(byref n as EvalValue) as Boolean
         ' Negative adjustment: check if exactly divisible
         dim divisor as Integer = -adjust
         if divisor <= numFracDigits then
-          dim pow10Divisor as ULongInt
-          if TryMult10_N_TimesImpl(1ull, divisor, pow10Divisor) then
+          dim pow10Divisor as SmUInt
+          if TryMult10_N_TimesImpl(SmCUInt(1), divisor, pow10Divisor) then
             ' Check if the last 'divisor' fractional digits are all zero
-            dim fracRemainder as ULongInt = decFracAcc mod pow10Divisor
-            if fracRemainder = 0ull then
+            dim fracRemainder as SmUInt = decFracAcc mod pow10Divisor
+            if fracRemainder = SmCUInt(0) then
               ' Divisible: result is exact integer
               dim resultDigits as Integer = numIntDigits + numFracDigits - divisor
               exactIntLiteral = TRUE
               if resultDigits = 0 then
                 decIntAcc = 0
-              elseif resultDigits <= 20 then
+              elseif resultDigits <= SM_UINT_DIGITS10 then
                 ' Combine and reduce by divisor
-                dim exactInt as ULongInt = decIntAcc
-                if TryMult10_N_TimesImpl(exactInt, numFracDigits - divisor, exactInt) = FALSE then
+                dim exactDecUInt as SmUInt = decIntAcc
+                if TryMult10_N_TimesImpl(exactDecUInt, numFracDigits - divisor, exactDecUInt) = FALSE then
                   exactIntLiteral = FALSE
-                elseif TryAddULongChecked(exactInt, decFracAcc \ pow10Divisor, exactInt) = FALSE then
+                elseif TryAddSmUIntChecked(exactDecUInt, decFracAcc \ pow10Divisor, exactDecUInt) = FALSE then
                   exactIntLiteral = FALSE
                 else
-                  decIntAcc = exactInt
+                  decIntAcc = exactDecUInt
                 end if
               else
                 ' Too many result digits
@@ -11846,7 +12377,7 @@ private function ParseScalarNumericValue(byref n as EvalValue) as Boolean
               end if
               if exactIntLiteral then
                 numFracDigits = 0
-                dVal = CDbl(decIntAcc)
+                dVal = SmCFloat(decIntAcc)
               end if
             end if
           end if
@@ -11855,9 +12386,9 @@ private function ParseScalarNumericValue(byref n as EvalValue) as Boolean
     end if
 
     if numFracDigits = 0 andalso exactIntLiteral then
-      if decIntAcc <= FB_I64_MAX_U then
+      if decIntAcc <= SM_INT_MAX_U then
         keepExactInt = TRUE
-        keepInt = CLngInt(decIntAcc)
+        keepInt = SmCInt(decIntAcc)
       end if
       keepExactUInt = TRUE
       keepUInt = decIntAcc
@@ -11867,19 +12398,19 @@ private function ParseScalarNumericValue(byref n as EvalValue) as Boolean
     end if
   end if
 
-  if keepExactUInt andalso keepUInt <= FB_I64_MAX_U then
+  if keepExactUInt andalso keepUInt <= SM_INT_MAX_U then
     if keepExactInt = FALSE then
       keepExactInt = TRUE
-      keepInt = CLngInt(keepUInt)
+      keepInt = SmCInt(keepUInt)
     end if
   end if
 
-  if keepExactUInt andalso keepUInt > FB_I64_MAX_U then
-    ValueSetUInt64(n, keepUInt)
+  if keepExactUInt andalso keepUInt > SM_INT_MAX_U then
+    ValueSetSmUInt(n, keepUInt)
   elseif keepExactInt then
-    ValueSetInt64(n, keepInt)
+    ValueSetSmInt(n, keepInt)
   elseif keepExactUInt then
-    ValueSetUInt64(n, keepUInt)
+    ValueSetSmUInt(n, keepUInt)
   else
     ValueSetScalar(n, dVal)
   end if
@@ -11906,7 +12437,7 @@ end function
 
 private function ParseFactor() as EvalValue
   dim n as EvalValue
-  ValueSetInt64(n, 0)
+  ValueSetSmInt(n, 0)
   wasPercentage = FALSE
   dim skipTightImagSuffix as Boolean = FALSE
   dim allowIndex as Boolean = TRUE
@@ -11965,7 +12496,9 @@ private function ParseFactor() as EvalValue
     SkipSpaces()
     if pStream[0] = CHAR_COMMA then
       dim elems() as EvalValue
-      redim elems(0)
+      dim elemCap as Integer = 8
+      dim elemCount as Integer = 1
+      redim elems(0 to elemCap - 1)
       elems(0) = firstVal
       dim hasComma as Boolean = TRUE
       do
@@ -11973,8 +12506,12 @@ private function ParseFactor() as EvalValue
         if hasComma = FALSE then exit do
         dim nextVal as EvalValue = ParseExpression()
         if parseError then return n
-        redim preserve elems(0 to ubound(elems) + 1)
-        elems(ubound(elems)) = nextVal
+        if elemCount >= elemCap then
+          elemCap *= 2
+          redim preserve elems(0 to elemCap - 1)
+        end if
+        elems(elemCount) = nextVal
+        elemCount += 1
         SkipSpaces()
         if pStream[0] <> CHAR_COMMA andalso pStream[0] <> CHAR_RPAREN then
           SetMismatchedBracketBraceOrUnexpectedToken(asc(pStream[0]))
@@ -11982,6 +12519,7 @@ private function ParseFactor() as EvalValue
         end if
       loop while hasComma
       if TryConsumeClosingParenOrSetError() = FALSE then return n
+      if elemCap <> elemCount then redim preserve elems(0 to elemCount - 1)
       dim vals() as ScalarValue
       dim flatCount as Integer = CollectArgsAsScalarValues(elems(), vals())
       if flatCount <= 0 then
@@ -12085,9 +12623,9 @@ private function ParsePower() as EvalValue
   return n
 end function
 
-private function TryConsumeMultiplicativeOp(byref op as UByte, byref useInt64 as Integer, byref intOp as OperatorBitNameId) as Boolean
+private function TryConsumeMultiplicativeOp(byref op as UByte, byref useInt as Boolean, byref intOp as OperatorBitNameId) as Boolean
   op = 0
-  useInt64 = FALSE
+  useInt = FALSE
   intOp = OP_BIT_NONE
   if pStream[0] = CHAR_ASTERISK andalso pStream[1] <> CHAR_ASTERISK then
     op = CHAR_ASTERISK
@@ -12100,7 +12638,7 @@ private function TryConsumeMultiplicativeOp(byref op as UByte, byref useInt64 as
     return TRUE
   end if
   if pStream[0] = CHAR_PERCENT then
-    useInt64 = TRUE
+    useInt = TRUE
     intOp = OP_BIT_MOD
     pStream += 1
     return TRUE
@@ -12112,15 +12650,15 @@ private function TryConsumeMultiplicativeOp(byref op as UByte, byref useInt64 as
   return FALSE
 end function
 
-private sub ApplyMultiplicativeOpInPlace(byref leftV as EvalValue, byref rightV as EvalValue, byval useInt64 as Integer, byval intOp as OperatorBitNameId, byval op as UByte)
-  if useInt64 then
-    ApplyInt64ParserOpInPlace(leftV, rightV, intOp)
+private sub ApplyMultiplicativeOpInPlace(byref leftV as EvalValue, byref rightV as EvalValue, byval useInt as Boolean, byval intOp as OperatorBitNameId, byval op as UByte)
+  if useInt then
+    ApplySmIntParserOpInPlace(leftV, rightV, intOp)
   else
     ApplyBinaryParserOpInPlace(leftV, rightV, op)
   end if
 end sub
 
-private const PLAB_KIND_INT64 as Integer = 1
+private const PLAB_KIND_SMINT as Integer = 1
 private const PLAB_KIND_ADDITIVE as Integer = 2
 private const PLAB_KIND_COMPARISON as Integer = 3
 private const PLAB_KIND_MULTIPLICATIVE as Integer = 4
@@ -12142,15 +12680,15 @@ private function ParseUnary() as EvalValue
     if Parser_SupportComplexNumbers andalso v.kind = VK_SCALAR then
       ' Unary '-' on a complex-capable scalar must negate both components directly.
       ' This avoids NaN/Inf component loss in the generic *(-1) fallback.
-      dim ar as Double, ai as Double
+      dim ar as SmFloat, ai as SmFloat
       ScalarLoadCartesian(v.scalarValue, ar, ai)
-      dim outI as Double = -ai
+      dim outI as SmFloat = -ai
       if IsNaNValue(ai) then outI = MakeNaN()
-      ValueSetScalarComplexFromDoubles(outV, -ar, outI)
+      ValueSetScalarComplexFromFloats(outV, -ar, outI)
       return outV
     end if
     dim minusOne as EvalValue
-    ValueSetInt64(minusOne, -1)
+    ValueSetSmInt(minusOne, -1)
     if ApplyBinaryParserOp(v, minusOne, CHAR_ASTERISK, outV) = FALSE then return outV
     return outV
   elseif pStream[0] = CHAR_TILDE then
@@ -12160,7 +12698,7 @@ private function ParseUnary() as EvalValue
     if parseError then return v
     if syntaxCheckDepth > 0 then
       '' Complex ~ is a run-time check, same as bitwise and indexing.
-      ValueSetInt64(v, 0)
+      ValueSetSmInt(v, 0)
       return v
     end if
     if Parser_SupportComplexNumbers andalso EvalValueHasNonzeroImaginary(v) then
@@ -12169,8 +12707,8 @@ private function ParseUnary() as EvalValue
     end if
     dim outV as EvalValue
     dim minusOne as EvalValue
-    ValueSetInt64(minusOne, -1)
-    if ApplyInt64ParserOp(v, minusOne, OP_BIT_XOR, outV) = FALSE then return outV
+    ValueSetSmInt(minusOne, -1)
+    if ApplySmIntParserOp(v, minusOne, OP_BIT_XOR, outV) = FALSE then return outV
     return outV
   elseif pStream[0] = CHAR_EXCLAMATION andalso pStream[1] <> CHAR_EQUALS then
     pStream += 1
@@ -12230,45 +12768,45 @@ private function ParseAdditive() as EvalValue
   return ParseLeftAssocBinary(PLAB_KIND_ADDITIVE, 0)
 end function
 
-private const PARSE_INT64_LEVEL_ADDITIVE as Integer = 1
-private const PARSE_INT64_LEVEL_SHIFT as Integer = 2
-private const PARSE_INT64_LEVEL_BITAND as Integer = 3
-private const PARSE_INT64_LEVEL_BITXOR as Integer = 4
+private const PARSE_SMINT_LEVEL_ADDITIVE as Integer = 1
+private const PARSE_SMINT_LEVEL_SHIFT as Integer = 2
+private const PARSE_SMINT_LEVEL_BITAND as Integer = 3
+private const PARSE_SMINT_LEVEL_BITXOR as Integer = 4
 
-private function ParseInt64OperandLevel(byval levelId as Integer) as EvalValue
+private function ParseSmIntOperandLevel(byval levelId as Integer) as EvalValue
   select case levelId
-    case PARSE_INT64_LEVEL_ADDITIVE: return ParseAdditive()
-    case PARSE_INT64_LEVEL_SHIFT: return ParseShift()
-    case PARSE_INT64_LEVEL_BITAND: return ParseBitwiseAnd()
-    case PARSE_INT64_LEVEL_BITXOR: return ParseBitwiseXor()
+    case PARSE_SMINT_LEVEL_ADDITIVE: return ParseAdditive()
+    case PARSE_SMINT_LEVEL_SHIFT: return ParseShift()
+    case PARSE_SMINT_LEVEL_BITAND: return ParseBitwiseAnd()
+    case PARSE_SMINT_LEVEL_BITXOR: return ParseBitwiseXor()
   end select
   dim outV as EvalValue
-  ValueSetInt64(outV, 0)
+  ValueSetSmInt(outV, 0)
   SetParseErrorById(PARSE_ERR_UNEXPECTED_TOKEN)
   return outV
 end function
 
-private function TryConsumeInt64BinaryOp(byval levelId as Integer, byref outOp as OperatorBitNameId) as Boolean
+private function TryConsumeSmIntBinaryOp(byval levelId as Integer, byref outOp as OperatorBitNameId) as Boolean
   select case levelId
-    case PARSE_INT64_LEVEL_ADDITIVE
+    case PARSE_SMINT_LEVEL_ADDITIVE
       if (pStream[0] = CHAR_LESS_THAN andalso pStream[1] = CHAR_LESS_THAN) orelse (pStream[0] = CHAR_GREATER_THAN andalso pStream[1] = CHAR_GREATER_THAN) then
         if pStream[0] = CHAR_LESS_THAN then outOp = OP_BIT_SHL else outOp = OP_BIT_SHR
         pStream += 2
         return TRUE
       end if
-    case PARSE_INT64_LEVEL_SHIFT
+    case PARSE_SMINT_LEVEL_SHIFT
       if pStream[0] = CHAR_AMPERSAND andalso pStream[1] <> CHAR_AMPERSAND then
         outOp = OP_BIT_AND
         pStream += 1
         return TRUE
       end if
-    case PARSE_INT64_LEVEL_BITAND
+    case PARSE_SMINT_LEVEL_BITAND
       if pStream[0] = CHAR_CARET then
         outOp = OP_BIT_XOR
         pStream += 1
         return TRUE
       end if
-    case PARSE_INT64_LEVEL_BITXOR
+    case PARSE_SMINT_LEVEL_BITXOR
       if pStream[0] = CHAR_PIPE andalso pStream[1] <> CHAR_PIPE then
         outOp = OP_BIT_OR
         pStream += 1
@@ -12279,19 +12817,19 @@ private function TryConsumeInt64BinaryOp(byval levelId as Integer, byref outOp a
 end function
 
 private function ParseShift() as EvalValue
-  return ParseLeftAssocBinary(PLAB_KIND_INT64, PARSE_INT64_LEVEL_ADDITIVE)
+  return ParseLeftAssocBinary(PLAB_KIND_SMINT, PARSE_SMINT_LEVEL_ADDITIVE)
 end function
 
 private function ParseBitwiseAnd() as EvalValue
-  return ParseLeftAssocBinary(PLAB_KIND_INT64, PARSE_INT64_LEVEL_SHIFT)
+  return ParseLeftAssocBinary(PLAB_KIND_SMINT, PARSE_SMINT_LEVEL_SHIFT)
 end function
 
 private function ParseBitwiseXor() as EvalValue
-  return ParseLeftAssocBinary(PLAB_KIND_INT64, PARSE_INT64_LEVEL_BITAND)
+  return ParseLeftAssocBinary(PLAB_KIND_SMINT, PARSE_SMINT_LEVEL_BITAND)
 end function
 
 private function ParseBitwiseOr() as EvalValue
-  return ParseLeftAssocBinary(PLAB_KIND_INT64, PARSE_INT64_LEVEL_BITXOR)
+  return ParseLeftAssocBinary(PLAB_KIND_SMINT, PARSE_SMINT_LEVEL_BITXOR)
 end function
 
 private function TryConsumeComparisonOperator(byref outOp as OperatorCmpNameId) as Boolean
@@ -12340,13 +12878,13 @@ private function TryConsumeComparisonOperator(byref outOp as OperatorCmpNameId) 
   return FALSE
 end function
 
-private function ParseLeftAssocBinary(byval kind as Integer, byval int64LevelId as Integer) as EvalValue
+private function ParseLeftAssocBinary(byval kind as Integer, byval intLevelId as Integer) as EvalValue
   dim n as EvalValue
   dim termWasPercentage as Boolean = FALSE
 
   select case kind
-    case PLAB_KIND_INT64
-      n = ParseInt64OperandLevel(int64LevelId)
+    case PLAB_KIND_SMINT
+      n = ParseSmIntOperandLevel(intLevelId)
     case PLAB_KIND_ADDITIVE
       n = ParseMultiplicative()
     case PLAB_KIND_COMPARISON
@@ -12355,7 +12893,7 @@ private function ParseLeftAssocBinary(byval kind as Integer, byval int64LevelId 
       n = ParsePostfixPercent()
       termWasPercentage = wasPercentage
     case else
-      ValueSetInt64(n, 0)
+      ValueSetSmInt(n, 0)
       SetParseErrorById(PARSE_ERR_UNEXPECTED_TOKEN)
       return n
   end select
@@ -12365,11 +12903,11 @@ private function ParseLeftAssocBinary(byval kind as Integer, byval int64LevelId 
     if parseError then exit while
 
     select case kind
-      case PLAB_KIND_INT64
+      case PLAB_KIND_SMINT
         dim intOp as OperatorBitNameId = OP_BIT_NONE
-        if TryConsumeInt64BinaryOp(int64LevelId, intOp) = FALSE then exit while
-        dim n2Int64 as EvalValue = ParseInt64OperandLevel(int64LevelId)
-        ApplyInt64ParserOpInPlace(n, n2Int64, intOp)
+        if TryConsumeSmIntBinaryOp(intLevelId, intOp) = FALSE then exit while
+        dim n2Int as EvalValue = ParseSmIntOperandLevel(intLevelId)
+        ApplySmIntParserOpInPlace(n, n2Int, intOp)
       case PLAB_KIND_ADDITIVE
         dim addOp as UByte = 0
         if TryConsumeAdditiveOperator(addOp) = FALSE then exit while
@@ -12383,11 +12921,11 @@ private function ParseLeftAssocBinary(byval kind as Integer, byval int64LevelId 
         ApplyComparisonParserOpInPlace(n, n2Cmp, cmpOp)
       case PLAB_KIND_MULTIPLICATIVE
         dim mulOp as UByte = 0
-        dim useInt64 as Integer = FALSE
+        dim useInt as Boolean = FALSE
         dim mulIntOp as OperatorBitNameId = OP_BIT_NONE
-        if TryConsumeMultiplicativeOp(mulOp, useInt64, mulIntOp) = FALSE then exit while
+        if TryConsumeMultiplicativeOp(mulOp, useInt, mulIntOp) = FALSE then exit while
         dim n2Mul as EvalValue = ParsePostfixPercent()
-        ApplyMultiplicativeOpInPlace(n, n2Mul, useInt64, mulIntOp, mulOp)
+        ApplyMultiplicativeOpInPlace(n, n2Mul, useInt, mulIntOp, mulOp)
         termWasPercentage = FALSE
       case else
         exit while
@@ -12478,9 +13016,11 @@ private sub ResetTopLevelEvaluationState(byref exprInput as String)
   unknownVarsText = ""
   unknownFuncsText = ""
   udfCallStackSp = 0
+  boundEvalDepth = smBoundEvalDepthSeed
+  smBoundEvalDepthSeed = 0
   errorBaseCol = 1
   rootInputExpr = exprInput
-  parseError = 0
+  parseError = FALSE
   pStream = 0
   exprStart = 0
   lastRawResultValid = FALSE
@@ -12489,7 +13029,7 @@ end sub
 
 private sub RawCartesianFromScalarValue(byref sv as ScalarValue, byval imagPart as Boolean, byref outC as RawCartesianScalar)
   ScalarRepairExactMetadata(sv)
-  outC.kind = RSK_FLOATING
+  outC.kind = RSK_SMFLOATING
   outC.floatValue = 0.0
   if imagPart = FALSE then
     if ScalarIsTime(sv) then
@@ -12498,78 +13038,78 @@ private sub RawCartesianFromScalarValue(byref sv as ScalarValue, byval imagPart 
       exit sub
     end if
     if ScalarHasRenderRational(sv) then
-      if ScalarExactUInt64MetadataValid(sv) orelse sv.exactUInt64 <> 0 then
-        RawCartesianAssignReducedRational(sv.exactInt64, sv.exactUInt64, outC)
+      if ScalarExactSmUIntMetadataValid(sv) orelse sv.exactUInt <> 0 then
+        RawCartesianAssignReducedRational(sv.exactInt, sv.exactUInt, outC)
         exit sub
       end if
     end if
     if (sv.flags and SVF_RENDER_INT_POWER) <> 0 then
-      if sv.imagExactUInt64 > 1ull then
+      if sv.imagExactUInt > SmCUInt(1) then
         outC.kind = RSK_INT_POWER
-        outC.ratNum = sv.imagExactInt64
-        outC.ratDen = sv.imagExactUInt64
+        outC.ratNum = sv.imagExactInt
+        outC.ratDen = sv.imagExactUInt
         exit sub
       end if
     end if
-    if ScalarExactInt64Valid(sv) then
-      outC.kind = RSK_INT64
-      outC.intValue = sv.exactInt64
+    if ScalarExactSmIntValid(sv) then
+      outC.kind = RSK_SMINT
+      outC.intValue = sv.exactInt
       exit sub
     end if
-    if ScalarExactUInt64Valid(sv) then
-      outC.kind = RSK_UINT64
-      outC.uintValue = sv.exactUInt64
+    if ScalarExactSmUIntValid(sv) then
+      outC.kind = RSK_SMUINT
+      outC.uintValue = sv.exactUInt
       exit sub
     end if
-    if sv.scalarStorageKind = SSK_INT64 then
-      outC.kind = RSK_INT64
-      outC.intValue = sv.exactInt64
+    if sv.scalarStorageKind = SSK_SMINT then
+      outC.kind = RSK_SMINT
+      outC.intValue = sv.exactInt
       exit sub
     end if
-    if sv.scalarStorageKind = SSK_UINT64 then
-      outC.kind = RSK_UINT64
-      outC.uintValue = sv.exactUInt64
+    if sv.scalarStorageKind = SSK_SMUINT then
+      outC.kind = RSK_SMUINT
+      outC.uintValue = sv.exactUInt
       exit sub
     end if
-    outC.kind = RSK_FLOATING
+    outC.kind = RSK_SMFLOATING
     outC.floatValue = sv.scalar
     exit sub
   end if
   if ScalarHasImagRenderRational(sv) then
-    if ScalarImagExactUInt64MetadataValid(sv) orelse sv.imagExactUInt64 <> 0 then
-      RawCartesianAssignReducedRational(sv.imagExactInt64, sv.imagExactUInt64, outC)
+    if ScalarImagExactSmUIntMetadataValid(sv) orelse sv.imagExactUInt <> 0 then
+      RawCartesianAssignReducedRational(sv.imagExactInt, sv.imagExactUInt, outC)
       exit sub
     end if
   end if
-  if ScalarImagExactInt64Valid(sv) then
-    outC.kind = RSK_INT64
-    outC.intValue = sv.imagExactInt64
+  if ScalarImagExactSmIntValid(sv) then
+    outC.kind = RSK_SMINT
+    outC.intValue = sv.imagExactInt
     exit sub
   end if
-  if ScalarImagExactUInt64Valid(sv) then
-    if sv.imagExactUInt64 <= FB_I64_MAX_U then
-      outC.kind = RSK_INT64
-      outC.intValue = CLngInt(sv.imagExactUInt64)
+  if ScalarImagExactSmUIntValid(sv) then
+    if sv.imagExactUInt <= SM_INT_MAX_U then
+      outC.kind = RSK_SMINT
+      outC.intValue = SmCInt(sv.imagExactUInt)
     else
-      outC.kind = RSK_UINT64
-      outC.uintValue = sv.imagExactUInt64
+      outC.kind = RSK_SMUINT
+      outC.uintValue = sv.imagExactUInt
     end if
     exit sub
   end if
-  if sv.imagExactInt64 <> 0 orelse sv.imagExactUInt64 <> 0 then
-    if sv.imagExactInt64 <> 0 then
-      outC.kind = RSK_INT64
-      outC.intValue = sv.imagExactInt64
-    elseif sv.imagExactUInt64 <= FB_I64_MAX_U then
-      outC.kind = RSK_INT64
-      outC.intValue = CLngInt(sv.imagExactUInt64)
+  if sv.imagExactInt <> 0 orelse sv.imagExactUInt <> 0 then
+    if sv.imagExactInt <> 0 then
+      outC.kind = RSK_SMINT
+      outC.intValue = sv.imagExactInt
+    elseif sv.imagExactUInt <= SM_INT_MAX_U then
+      outC.kind = RSK_SMINT
+      outC.intValue = SmCInt(sv.imagExactUInt)
     else
-      outC.kind = RSK_UINT64
-      outC.uintValue = sv.imagExactUInt64
+      outC.kind = RSK_SMUINT
+      outC.uintValue = sv.imagExactUInt
     end if
     exit sub
   end if
-  outC.kind = RSK_FLOATING
+  outC.kind = RSK_SMFLOATING
   outC.floatValue = sv.imag
 end sub
 
@@ -12578,86 +13118,86 @@ private sub ScalarValueLoadFromRawCartesian(byref c as RawCartesianScalar, byref
   case RSK_TIME
     if imagPart then exit sub
     sv.scalarStorageKind = SSK_TIME
-    sv.exactInt64 = c.intValue
-    sv.scalar = CDbl(c.intValue) / 1000.0
-    sv.exactInt64Valid = FALSE
-    sv.exactUInt64Valid = FALSE
-  case RSK_INT64
+    sv.exactInt = c.intValue
+    sv.scalar = SmCFloat(c.intValue) / 1000.0
+    sv.exactIntValid = FALSE
+    sv.exactUIntValid = FALSE
+  case RSK_SMINT
     if imagPart then
-      sv.imag = CDbl(c.intValue)
-      sv.imagExactInt64 = c.intValue
-      ScalarSetImagExactInt64Valid(sv, TRUE)
+      sv.imag = SmCFloat(c.intValue)
+      sv.imagExactInt = c.intValue
+      ScalarSetImagExactSmIntValid(sv, TRUE)
     else
-      sv.scalarStorageKind = SSK_INT64
-      sv.scalar = CDbl(c.intValue)
-      sv.exactInt64Valid = TRUE
-      sv.exactInt64 = c.intValue
+      sv.scalarStorageKind = SSK_SMINT
+      sv.scalar = SmCFloat(c.intValue)
+      sv.exactIntValid = TRUE
+      sv.exactInt = c.intValue
       if c.intValue >= 0 then
-        sv.exactUInt64Valid = TRUE
-        sv.exactUInt64 = CULngInt(c.intValue)
+        sv.exactUIntValid = TRUE
+        sv.exactUInt = SmCUInt(c.intValue)
       else
-        sv.exactUInt64Valid = FALSE
-        sv.exactUInt64 = 0
+        sv.exactUIntValid = FALSE
+        sv.exactUInt = 0
       end if
     end if
-  case RSK_UINT64
+  case RSK_SMUINT
     if imagPart then
-      sv.imag = CDbl(c.uintValue)
-      if c.uintValue <= FB_I64_MAX_U then
-        sv.imagExactInt64 = CLngInt(c.uintValue)
-        ScalarSetImagExactInt64Valid(sv, TRUE)
+      sv.imag = SmCFloat(c.uintValue)
+      if c.uintValue <= SM_INT_MAX_U then
+        sv.imagExactInt = SmCInt(c.uintValue)
+        ScalarSetImagExactSmIntValid(sv, TRUE)
       else
-        sv.imagExactUInt64 = c.uintValue
-        ScalarSetImagExactUInt64Valid(sv, TRUE)
+        sv.imagExactUInt = c.uintValue
+        ScalarSetImagExactSmUIntValid(sv, TRUE)
       end if
     else
-      sv.scalarStorageKind = SSK_UINT64
-      sv.scalar = CDbl(c.uintValue)
-      sv.exactUInt64Valid = TRUE
-      sv.exactUInt64 = c.uintValue
-      if c.uintValue <= FB_I64_MAX_U then
-        sv.exactInt64Valid = TRUE
-        sv.exactInt64 = CLngInt(c.uintValue)
+      sv.scalarStorageKind = SSK_SMUINT
+      sv.scalar = SmCFloat(c.uintValue)
+      sv.exactUIntValid = TRUE
+      sv.exactUInt = c.uintValue
+      if c.uintValue <= SM_INT_MAX_U then
+        sv.exactIntValid = TRUE
+        sv.exactInt = SmCInt(c.uintValue)
       else
-        sv.exactInt64Valid = FALSE
-        sv.exactInt64 = 0
+        sv.exactIntValid = FALSE
+        sv.exactInt = 0
       end if
     end if
   case RSK_RATIONAL
     if imagPart then
       sv.flags or= SVF_IMAG_RENDER_RATIONAL
-      sv.imagExactInt64 = c.ratNum
-      sv.imagExactUInt64 = c.ratDen
-      ScalarSetImagExactInt64Valid(sv, TRUE)
-      ScalarSetImagExactUInt64Valid(sv, TRUE)
+      sv.imagExactInt = c.ratNum
+      sv.imagExactUInt = c.ratDen
+      ScalarSetImagExactSmIntValid(sv, TRUE)
+      ScalarSetImagExactSmUIntValid(sv, TRUE)
     else
       sv.flags or= SVF_RENDER_RATIONAL
-      sv.exactInt64Valid = TRUE
-      sv.exactInt64 = c.ratNum
-      sv.exactUInt64Valid = TRUE
-      sv.exactUInt64 = c.ratDen
-      sv.scalar = CDbl(c.ratNum) / CDbl(c.ratDen)
+      sv.exactIntValid = TRUE
+      sv.exactInt = c.ratNum
+      sv.exactUIntValid = TRUE
+      sv.exactUInt = c.ratDen
+      sv.scalar = SmCFloat(c.ratNum) / SmCFloat(c.ratDen)
     end if
   case else
     if imagPart then
       sv.imag = c.floatValue
     else
-      sv.scalarStorageKind = SSK_FLOATINGPOINT
+      sv.scalarStorageKind = SSK_SMFLOATINGPOINT
       sv.scalar = c.floatValue
-      sv.exactInt64Valid = FALSE
-      sv.exactUInt64Valid = FALSE
+      sv.exactIntValid = FALSE
+      sv.exactUIntValid = FALSE
     end if
   end select
 end sub
 
 private sub ScalarValueFromRawScalar(byref s as RawScalar, byref sv as ScalarValue)
-  sv.scalarStorageKind = SSK_FLOATINGPOINT
+  sv.scalarStorageKind = SSK_SMFLOATINGPOINT
   sv.flags = 0
   sv.scalar = 0.0
-  sv.exactInt64Valid = FALSE
-  sv.exactInt64 = 0
-  sv.exactUInt64Valid = FALSE
-  sv.exactUInt64 = 0
+  sv.exactIntValid = FALSE
+  sv.exactInt = 0
+  sv.exactUIntValid = FALSE
+  sv.exactUInt = 0
   ScalarClearImag(sv)
   if s.kind = RSK_COMPLEX then
     ScalarValueLoadFromRawCartesian(s.real, sv, FALSE)
@@ -12732,8 +13272,8 @@ private sub InvalidateLastRawResult()
 end sub
 
 sub Parser_ClearVariables()
-  erase variables
-  erase userFunctions
+  ClearVariables()
+  ClearUserFunctions()
   dim emptyExpr as String = ""
   ResetTopLevelEvaluationState(emptyExpr)
   if Parser_SupportComplexNumbers then
@@ -12743,13 +13283,13 @@ sub Parser_ClearVariables()
   end if
 end sub
 
-function Parser_TryEvaluate(byref sExpr as String, byref result as Double) as Boolean
+function Parser_TryEvaluate(byref sExpr as String, byref result as SmFloat) as Boolean
   dim textResult as String, isArray as Boolean
   return Parser_TryEvaluateEx(sExpr, result, textResult, isArray)
 end function
 
 function Parser_TryEvaluateExRaw(byref sExpr as String, byref rawOut as RawResult) as Boolean
-  dim result as Double
+  dim result as SmFloat
   dim resultText as String
   dim isArray as Boolean
   RawResultClear(rawOut)
@@ -12817,11 +13357,11 @@ private function IsStmtUdfDefinitionAt(byref stmt as String) as Boolean
   return isUdfDef
 end function
 
-private function TryEvaluateTopLevelStatements(byref exprInput as String, byref result as Double, byref resultText as String, byref isArray as Boolean, byref handled as Boolean) as Boolean
+private function TryEvaluateTopLevelStatements(byref exprInput as String, byref result as SmFloat, byref resultText as String, byref isArray as Boolean, byref handled as Boolean) as Boolean
   handled = FALSE
   if instr(exprInput, ";") <= 0 then return TRUE
 
-  dim hasTopLevelSep as Integer = 0
+  dim hasTopLevelSep as Boolean = FALSE
   dim scanParen as Integer = 0
   dim scanBracket as Integer = 0
   dim scanBrace as Integer = 0
@@ -12829,14 +13369,14 @@ private function TryEvaluateTopLevelStatements(byref exprInput as String, byref 
   while scanP[0] <> CHAR_NUL
     dim sch as UByte = scanP[0]
     if IsTopLevelStatementSeparatorChar(sch, scanParen, scanBracket, scanBrace) then
-      hasTopLevelSep = 1
+      hasTopLevelSep = TRUE
       exit while
     end if
     UpdateNestingDepths(sch, scanParen, scanBracket, scanBrace)
     scanP += 1
   wend
 
-  if hasTopLevelSep = 0 then return TRUE
+  if hasTopLevelSep = FALSE then return TRUE
 
   dim stmtStart as Integer = 1
   dim depthParen as Integer = 0
@@ -12845,20 +13385,17 @@ private function TryEvaluateTopLevelStatements(byref exprInput as String, byref 
   dim hasPrevStmtResult as Boolean = FALSE
   dim iStmt as Integer
   for iStmt = 1 to len(exprInput) + 1
-    dim ch as String
     dim chByte as UByte
     if iStmt <= len(exprInput) then
-      ch = mid(exprInput, iStmt, 1)
-      chByte = asc(ch)
+      chByte = exprInput[iStmt - 1]
     else
-      ch = ";"
       chByte = CHAR_SEMICOLON
     end if
-    dim isStmtSep as Integer = 0
+    dim isStmtSep as Boolean = FALSE
     if iStmt > len(exprInput) then
-      isStmtSep = 1
+      isStmtSep = TRUE
     elseif IsTopLevelStatementSeparatorChar(chByte, depthParen, depthBracket, depthBrace) then
-      isStmtSep = 1
+      isStmtSep = TRUE
     end if
 
     if isStmtSep then
@@ -12880,8 +13417,8 @@ private function TryEvaluateTopLevelStatements(byref exprInput as String, byref 
       end if
       dim leadWs as Integer = 0
       while leadWs < len(rawStmt)
-        dim wsCh as String = mid(rawStmt, leadWs + 1, 1)
-        if wsCh = " " orelse wsCh = chr(9) then
+        dim wsCh as UByte = rawStmt[leadWs]
+        if wsCh = CHAR_SPACE orelse wsCh = CHAR_TAB then
           leadWs += 1
         else
           exit while
@@ -12897,7 +13434,7 @@ private function TryEvaluateTopLevelStatements(byref exprInput as String, byref 
           if TryRewriteTrailingFormatterStmt(stmt, fmtRewritten) then allowFormatterSugar = TRUE
         end if
         if allowFormatterSugar = FALSE then
-          parseError = 0
+          parseError = FALSE
           SetParseErrorAtColumn(FB_STR_UNEXPECTED_TOKEN, iStmt)
           return FALSE
         end if
@@ -13011,7 +13548,7 @@ private function ElementAssignRejectsTimeMix(byref baseV as EvalValue, byref rhs
   return TRUE
 end function
 
-private sub BuildElementAssignedArray(byref baseV as EvalValue, byval resolved as LongInt, byref rhs as EvalValue, byref outV as EvalValue)
+private sub BuildElementAssignedArray(byref baseV as EvalValue, byval resolved as SmInt, byref rhs as EvalValue, byref outV as EvalValue)
   dim oldLen as Integer = ValueArrayLen(baseV)
   dim lb as Integer = lbound(baseV.arr)
   dim rhsCount as Integer
@@ -13050,7 +13587,7 @@ private sub BuildElementAssignedArray(byref baseV as EvalValue, byval resolved a
   ValueSetArrayFromScalarValues(outV, vals())
 end sub
 
-private function TryEvaluateElementAssignStatement(byref result as Double, byref resultText as String, byref isArray as Boolean) as Boolean
+private function TryEvaluateElementAssignStatement(byref result as SmFloat, byref resultText as String, byref isArray as Boolean) as Boolean
   dim varName as String = ConsumeIdentTokenFromStream()
   dim assignNameErr as String
   if TryValidateAssignmentTargetName(varName, assignNameErr) = FALSE then
@@ -13071,11 +13608,11 @@ private function TryEvaluateElementAssignStatement(byref result as Double, byref
   if TryParseAssignBracket(baseV, indexValue) = FALSE then return FALSE
   ApplyUnknownNameErrors()
   if parseError then return FALSE
-  dim idxInt as LongInt
+  dim idxInt as SmInt
   if TryGetArrayIndexIntFromEvalValue(indexValue, idxInt) = FALSE then return FALSE
   dim arrLen as Integer = ValueArrayLen(baseV)
-  dim resolved as LongInt
-  if TryResolveArrayIndex(CLngInt(arrLen), idxInt, resolved) = FALSE then return FALSE
+  dim resolved as SmInt
+  if TryResolveArrayIndex(SmCInt(arrLen), idxInt, resolved) = FALSE then return FALSE
   SkipSpaces()
   if pStream[0] <> CHAR_EQUALS orelse pStream[1] = CHAR_EQUALS then
     SetParseErrorById(PARSE_ERR_UNEXPECTED_TOKEN)
@@ -13121,7 +13658,7 @@ private function TryEvaluateElementAssignStatement(byref result as Double, byref
 end function
 
 '' Validate, store, and publish ``defined f(...)``. Empty-body rejection stays in the validation.
-private function TryCommitDefinedUserFunction(byref fnName as String, fnParams() as String, byref body as String, byref result as Double, byref resultText as String, byref isArray as Boolean) as Boolean
+private function TryCommitDefinedUserFunction(byref fnName as String, fnParams() as String, byref body as String, byref result as SmFloat, byref resultText as String, byref isArray as Boolean) as Boolean
   dim errText as String = ""
   if TryValidateUserFunctionDefinition(fnName, fnParams(), body, errText) = FALSE then
     SetValidationError(errText)
@@ -13135,18 +13672,18 @@ private function TryCommitDefinedUserFunction(byref fnName as String, fnParams()
   return TRUE
 end function
 
-private function TryEvaluateStatementCore(byref exprInput as String, byref result as Double, byref resultText as String, byref isArray as Boolean, byval suppressTailHint as Boolean) as Boolean
+private function TryEvaluateStatementCore(byref exprInput as String, byref result as SmFloat, byref resultText as String, byref isArray as Boolean, byval suppressTailHint as Boolean) as Boolean
   dim savedSuppressTailHint as Boolean = suppressBareFunctionTailHint
   suppressBareFunctionTailHint = suppressTailHint
-  dim i as Integer, hasNonSpace as Integer = 0
+  dim i as Integer, hasNonSpace as Boolean = FALSE
   for i = 1 to Len(exprInput)
     dim c as Integer = Asc(Mid(exprInput, i, 1))
     if not (c = CHAR_SPACE orelse c = CHAR_TAB orelse c = CHAR_LF orelse c = CHAR_CR) then
-      hasNonSpace = 1
+      hasNonSpace = TRUE
       exit for
     end if
   next i
-  if hasNonSpace = 0 then
+  if hasNonSpace = FALSE then
     suppressBareFunctionTailHint = savedSuppressTailHint
     return FALSE
   end if
@@ -13154,7 +13691,7 @@ private function TryEvaluateStatementCore(byref exprInput as String, byref resul
   pStream = StrPtr(exprInput)
   SkipSpaces()
   exprStart = pStream
-  parseError = 0
+  parseError = FALSE
   isArray = FALSE
   resultText = ""
   result = 0
@@ -13195,7 +13732,7 @@ private function TryEvaluateStatementCore(byref exprInput as String, byref resul
         if pStream[0] = CHAR_NUL orelse pStream[0] = CHAR_SEMICOLON then
           if pStream[0] = CHAR_SEMICOLON then pStream += 1
           SkipSpaces()
-          if pStream[0] = CHAR_NUL andalso parseError = 0 then
+          if pStream[0] = CHAR_NUL andalso parseError = FALSE then
             dim assignNameErr as String
             if TryValidateAssignmentTargetName(varName, assignNameErr) = FALSE then
               SetValidationError(assignNameErr)
@@ -13213,7 +13750,7 @@ private function TryEvaluateStatementCore(byref exprInput as String, byref resul
             return TRUE
           end if
         end if
-        if parseError = 0 then SetParseErrorById(PARSE_ERR_UNEXPECTED_TOKEN)
+        if parseError = FALSE then SetParseErrorById(PARSE_ERR_UNEXPECTED_TOKEN)
         suppressBareFunctionTailHint = savedSuppressTailHint
         return FALSE
       end if
@@ -13256,7 +13793,7 @@ private function TryEvaluateStatementCore(byref exprInput as String, byref resul
   pStream = StrPtr(exprInput)
   SkipSpaces()
   exprStart = pStream
-  parseError = 0
+  parseError = FALSE
   dim outV as EvalValue
   outV = ParseExpression()
   if parseError then
@@ -13271,7 +13808,7 @@ private function TryEvaluateStatementCore(byref exprInput as String, byref resul
 
   ApplyUnknownNameErrors()
 
-  if pStream[0] <> CHAR_NUL andalso parseError = 0 then
+  if pStream[0] <> CHAR_NUL andalso parseError = FALSE then
     if pStream[0] = CHAR_COMMA then
       SetParseErrorById(PARSE_ERR_UNEXPECTED_COMMA)
     elseif pStream[0] = CHAR_RPAREN then
@@ -13280,7 +13817,7 @@ private function TryEvaluateStatementCore(byref exprInput as String, byref resul
       SetMismatchedBracketBraceOrUnexpectedToken(asc(pStream[0]))
     end if
   end if
-  if parseError = 1 then
+  if parseError = TRUE then
     suppressBareFunctionTailHint = savedSuppressTailHint
     return FALSE
   end if
@@ -13293,7 +13830,7 @@ private function TryEvaluateStatementCore(byref exprInput as String, byref resul
   return TRUE
 end function
 
-function Parser_TryEvaluateEx(byref sExpr as String, byref result as Double, byref resultText as String, byref isArray as Boolean) as Boolean
+function Parser_TryEvaluateEx(byref sExpr as String, byref result as SmFloat, byref resultText as String, byref isArray as Boolean) as Boolean
   dim exprAfterLineComment as String = StripLineComment(sExpr)
   dim exprInput as String = exprAfterLineComment
   const PARSER_MAX_EXPR_LEN as Integer = 32760
@@ -13337,7 +13874,7 @@ function Parser_GetLastRawResult(byref rawOut as RawResult) as Boolean
   return TRUE
 end function
 
-function Parser_FormatTimeMs(byval totalMs as LongInt) as String
+function Parser_FormatTimeMs(byval totalMs as SmInt) as String
   return FormatTimeCanonicalFromMs(totalMs)
 end function
 

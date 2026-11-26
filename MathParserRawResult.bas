@@ -3,7 +3,7 @@
 #include once "Inc\MathParserRawResult.bi"
 
 sub RawCartesianScalarClear(byref c as RawCartesianScalar)
-  c.kind = RSK_FLOATING
+  c.kind = RSK_SMFLOATING
   c.floatValue = 0.0
   c.intValue = 0
   c.uintValue = 0
@@ -13,7 +13,7 @@ end sub
 
 sub RawResultClear(byref r as RawResult)
   r.kind = RRK_NONE
-  r.scalar.kind = RSK_FLOATING
+  r.scalar.kind = RSK_SMFLOATING
   RawCartesianScalarClear(r.scalar.real)
   RawCartesianScalarClear(r.scalar.imag)
   r.scalar.renderBase = 0
@@ -35,9 +35,9 @@ end function
 
 function RawCartesianIsZero(byref c as RawCartesianScalar) as Boolean
   select case c.kind
-  case RSK_INT64
+  case RSK_SMINT
     return c.intValue = 0
-  case RSK_UINT64
+  case RSK_SMUINT
     return c.uintValue = 0
   case RSK_RATIONAL
     return c.ratNum = 0

@@ -8,7 +8,7 @@ const SMARTMATH_DECIMALS_MAX = 8
 const SMARTMATH_RESULT_PREFIX = " = "
 const SMARTMATH_ERROR_PREFIX = " ! "
 
-declare function FormatResult(byval d as Double) as String
+declare function FormatResult(byval d as SmFloat) as String
 declare function FormatRawResultForDisplay(byref r as RawResult) as String
 declare function FormatRawEvaluationResult(byref raw as RawResult) as String
 

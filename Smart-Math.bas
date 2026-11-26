@@ -3,7 +3,7 @@
 #include "Inc\PluginInterface.bi"
 #include "Inc\Scintilla.bi"
 #include "Inc\MathParser.bi"
-#include "Inc\ConfigManager.bi"
+#include "Inc\Smart-Math-Config.bi"
 #include "Inc\Smart-Math-Format.bi"
 #include "Inc\Smart-Math-CopyNormalize.bi"
 #include "Inc\Smart-Math-About.bi"

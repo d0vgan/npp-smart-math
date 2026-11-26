@@ -1,7 +1,7 @@
 #include "windows.bi"
 #include "crt.bi"
 #include "Inc\PluginInterface.bi"
-#include "Inc\ConfigManager.bi"
+#include once "Inc\Smart-Math-Config.bi"
 
 const INI_FILENAME = wstr("\SmartMath.ini")
 const INI_SECTION_SETTINGS = wstr("Settings")
@@ -18,10 +18,10 @@ const NPPM_GETPLUGINSCONFIGDIR = (WM_USER + 1000 + 46)
 
 dim shared as wstring * MAX_PATH iniFilePath
 dim shared as integer storedDecimalPlaces = DECIMAL_PLACES_DEFAULT
-dim shared as boolean storedUseThousandsSep = USE_THOUSANDS_SEP_DEFAULT <> 0
-dim shared as boolean storedSupportComplexNumbers = COMPLEX_NUMBERS_DEFAULT <> 0
-dim shared as boolean storedShowErrors = SHOW_ERRORS_DEFAULT <> 0
-dim shared as boolean storedSyntaxHighlight = SYNTAX_HIGHLIGHT_DEFAULT <> 0
+dim shared as Boolean storedUseThousandsSep = USE_THOUSANDS_SEP_DEFAULT <> 0
+dim shared as Boolean storedSupportComplexNumbers = COMPLEX_NUMBERS_DEFAULT <> 0
+dim shared as Boolean storedShowErrors = SHOW_ERRORS_DEFAULT <> 0
+dim shared as Boolean storedSyntaxHighlight = SYNTAX_HIGHLIGHT_DEFAULT <> 0
 dim shared as string storedDecimalSep
 dim shared as string storedThousandsSep
 dim shared as string storedArrayOutputSep
@@ -50,35 +50,35 @@ function Config_GetDecimalPlaces() as integer
   return storedDecimalPlaces
 end function
 
-sub Config_SetUseThousandsSep(byval enabled as boolean)
+sub Config_SetUseThousandsSep(byval enabled as Boolean)
   storedUseThousandsSep = enabled
 end sub
 
-function Config_GetUseThousandsSep() as boolean
+function Config_GetUseThousandsSep() as Boolean
   return storedUseThousandsSep
 end function
 
-sub Config_SetSupportComplexNumbers(byval enabled as boolean)
+sub Config_SetSupportComplexNumbers(byval enabled as Boolean)
   storedSupportComplexNumbers = enabled
 end sub
 
-function Config_GetSupportComplexNumbers() as boolean
+function Config_GetSupportComplexNumbers() as Boolean
   return storedSupportComplexNumbers
 end function
 
-sub Config_SetShowErrors(byval enabled as boolean)
+sub Config_SetShowErrors(byval enabled as Boolean)
   storedShowErrors = enabled
 end sub
 
-function Config_GetShowErrors() as boolean
+function Config_GetShowErrors() as Boolean
   return storedShowErrors
 end function
 
-sub Config_SetSyntaxHighlight(byval enabled as boolean)
+sub Config_SetSyntaxHighlight(byval enabled as Boolean)
   storedSyntaxHighlight = enabled
 end sub
 
-function Config_GetSyntaxHighlight() as boolean
+function Config_GetSyntaxHighlight() as Boolean
   return storedSyntaxHighlight
 end function
 
@@ -94,7 +94,7 @@ function Config_GetArrayOutputSep() as string
   return storedArrayOutputSep
 end function
 
-function Config_IsFileEnabled(path as string) as boolean
+function Config_IsFileEnabled(path as string) as Boolean
   dim as integer i
   for i = lbound(enabledFiles) to ubound(enabledFiles)
     if enabledFiles(i) = path then return TRUE
@@ -102,7 +102,7 @@ function Config_IsFileEnabled(path as string) as boolean
   return FALSE
 end function
 
-function Config_ToggleFile(path as string) as boolean
+function Config_ToggleFile(path as string) as Boolean
   dim as integer i, idx = -1
 
   for i = lbound(enabledFiles) to ubound(enabledFiles)

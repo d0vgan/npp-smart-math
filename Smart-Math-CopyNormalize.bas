@@ -1,5 +1,5 @@
 #include once "Inc\Smart-Math-Format.bi"
-#include once "Inc\ConfigManager.bi"
+#include once "Inc\Smart-Math-Config.bi"
 
 private function IndexOfExponentLetterCopy(byref s as String) as Integer
   dim n as Integer = Len(s)

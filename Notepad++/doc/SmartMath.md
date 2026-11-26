@@ -903,8 +903,9 @@ Purpose: test the kind of one value. The result is either `1` or `0`, the same k
 
 ## Advanced Numeric Behavior
 
-### Advanced Behavior: Integer Accuracy (Int64/UInt64)
+### Advanced Behavior: Integer Accuracy (SmInt/SmUInt, 64-bit by default)
 
+- The limits below are those of the default build (signed and unsigned 64-bit integers, `double` floats). A build with other `SmInt`/`SmUInt`/`SmFloat` types derives the same limits from its widths.
 - SmartMath tries to keep exact signed 64-bit integer semantics when possible.
 - It falls back to floating-point when required (for example division or overflow path).
 - Integer-only operators are checked in a defined signed 64-bit domain.

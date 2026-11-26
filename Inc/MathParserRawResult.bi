@@ -1,6 +1,8 @@
 #ifndef __MATHPARSER_RAWRESULT_BI__
 #define __MATHPARSER_RAWRESULT_BI__
 
+#include once "Inc\MathParserTypes.bi"
+
 enum RawResultKind
   RRK_NONE = 0
   RRK_SCALAR = 1
@@ -8,9 +10,9 @@ enum RawResultKind
 end enum
 
 enum RawScalarKind
-  RSK_FLOATING = 0
-  RSK_INT64 = 1
-  RSK_UINT64 = 2
+  RSK_SMFLOATING = 0
+  RSK_SMINT = 1
+  RSK_SMUINT = 2
   RSK_RATIONAL = 3
   RSK_COMPLEX = 4
   RSK_TIME = 5
@@ -20,11 +22,11 @@ end enum
 '' One real or imaginary component. Only the fields for ``kind`` are meaningful.
 type RawCartesianScalar
   kind as RawScalarKind
-  floatValue as Double   '' for RSK_FLOATING
-  intValue as LongInt    '' for RSK_INT64 and RSK_TIME (total milliseconds)
-  uintValue as ULongInt  '' for RSK_UINT64
-  ratNum as LongInt      '' for RSK_RATIONAL (ratNum / ratDen); RSK_INT_POWER base (signed)
-  ratDen as ULongInt     '' for RSK_RATIONAL; RSK_INT_POWER exponent
+  floatValue as SmFloat   '' for RSK_SMFLOATING
+  intValue as SmInt    '' for RSK_SMINT and RSK_TIME (total milliseconds)
+  uintValue as SmUInt  '' for RSK_SMUINT
+  ratNum as SmInt      '' for RSK_RATIONAL (ratNum / ratDen); RSK_INT_POWER base (signed)
+  ratDen as SmUInt     '' for RSK_RATIONAL; RSK_INT_POWER exponent
 end type
 
 '' Non-complex values: payload in ``real`` only; ``imag`` cleared; ``kind`` mirrors ``real.kind``.
