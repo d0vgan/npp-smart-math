@@ -162,7 +162,7 @@ Notes:
 
 - Make arrays with commas in parentheses:
   - `(1,2,3)`
-- A single value in parentheses without commas is not an array; it’s just grouping:
+- A single value in parentheses without commas is not an array; it's just grouping:
   - `(5)` behaves like scalar `5`
   - `((5))` also behaves like scalar `5` (still just grouping)
   - `flat(5)` is an array of one element

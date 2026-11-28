@@ -285,7 +285,7 @@ private function PollardRhoU64(byval n as ULongInt) as ULongInt
       dim diff as ULongInt
       if x >= y then diff = x - y else diff = y - x
       if diff = 0ull then exit for ' the sequence closed on itself: restart with a new (c, y0)
-      '' Brent on 64-bit FB (batch>1); on 32-bit batch is 1 (mulmod ≫ gcd).
+      '' Brent on 64-bit FB (batch>1); on 32-bit batch is 1 (mulmod >> gcd).
       prod = MulModU64(prod, diff, n)
       sinceGcd += 1
       if sinceGcd < FACTORINT_RHO_GCD_BATCH andalso iter < maxIter then continue for
